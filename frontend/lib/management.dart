@@ -57,7 +57,7 @@ extension Management on AppState {
                     ),
                     const SizedBox(height: 15),
                     const Text(
-                      'Staff sign in with their own ChatGPT account. Add their email and branch assignments here; site visitor access must also permit them before rollout.',
+                      'Create staff accounts with a username, password and allowed branches. Only Admin can create or change accounts.',
                       style: TextStyle(color: muted, fontSize: 11),
                     ),
                   ],
@@ -105,7 +105,7 @@ extension Management on AppState {
                         ),
                         title: Text(m['name']),
                         subtitle: Text(
-                          '${m['email']} · ${m['role']}\n${m['role'] == 'admin' ? 'All branches' : (jsonDecode(m['branches']) as List).map((id) => branches.where((b) => b['id'] == id).firstOrNull?['name'] ?? id).join(', ')}',
+                          '${m['username'] ?? m['email']} · ${m['role']}\n${m['role'] == 'admin' ? 'All branches' : (jsonDecode(m['branches']) as List).map((id) => branches.where((b) => b['id'] == id).firstOrNull?['name'] ?? id).join(', ')}',
                         ),
                         isThreeLine: true,
                         trailing: m['id'] == 'owner'
@@ -152,8 +152,9 @@ extension Management on AppState {
         ? List<String>.from(jsonDecode(existing['branches']))
         : <String>[];
     final name = TextEditingController(text: existing?['name'] ?? '');
-    final email = TextEditingController(text: existing?['email'] ?? '');
-    String role = existing?['role'] ?? 'cashier';
+    final username = TextEditingController(text: existing?['username'] ?? '');
+    final password = TextEditingController();
+    String role = existing?['role'] ?? 'reception';
     bool active = existing?['active'] != 0;
     final result = await showDialog<Json>(
       context: context,
@@ -179,20 +180,39 @@ extension Management on AppState {
                         ),
                         const SizedBox(height: 18),
                         TextField(
-                          controller: email,
-                          enabled: existing == null,
-                          decoration: const InputDecoration(
-                            labelText: 'ChatGPT account email',
+                          controller: username,
+                          autocorrect: false,
+                          enableSuggestions: false,
+                          decoration: InputDecoration(
+                            labelText: 'Username',
+                            helperText:
+                                existing?['username'] == null &&
+                                    existing != null
+                                ? 'Add a username, or keep using the existing email login.'
+                                : '3–50 letters, numbers, dots, hyphens or underscores',
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        TextField(
+                          controller: password,
+                          obscureText: true,
+                          decoration: InputDecoration(
+                            labelText: existing == null
+                                ? 'Initial password (at least 12 characters)'
+                                : 'New password (leave blank to keep current)',
                           ),
                         ),
                         const SizedBox(height: 18),
                         DropdownButtonFormField<String>(
+                          isExpanded: true,
                           initialValue: role,
                           decoration: const InputDecoration(labelText: 'Role'),
-                          items: ['cashier', 'manager', 'admin']
+                          items: ['reception', 'tailor', 'manager', 'admin']
                               .map(
-                                (r) =>
-                                    DropdownMenuItem(value: r, child: Text(r)),
+                                (r) => DropdownMenuItem(
+                                  value: r,
+                                  child: Text(roleLabel(r)),
+                                ),
                               )
                               .toList(),
                           onChanged: (v) => set(() => role = v!),
@@ -229,10 +249,11 @@ extension Management on AppState {
                   child: FilledButton(
                     onPressed: () => Navigator.pop(ctx, {
                       'name': name.text,
-                      'email': email.text,
+                      'username': username.text,
                       'role': role,
                       'branches': selected,
                       'active': active ? 1 : 0,
+                      'password': password.text,
                       if (existing != null) 'id': existing['id'],
                     }),
                     child: const Text('Save staff access'),
@@ -254,7 +275,8 @@ extension Management on AppState {
     }
     Future<void>.delayed(const Duration(seconds: 1), () {
       name.dispose();
-      email.dispose();
+      username.dispose();
+      password.dispose();
     });
   }
 

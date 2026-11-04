@@ -3,6 +3,15 @@ import 'dart:math';
 import 'package:http/http.dart' as http;
 
 typedef Json = Map<String, dynamic>;
+
+class ApiException implements Exception {
+  final String message;
+  final int status;
+  ApiException(this.message, this.status);
+  @override
+  String toString() => message;
+}
+
 String uid() {
   final random = Random.secure();
   return List.generate(32, (_) => random.nextInt(16).toRadixString(16)).join();
@@ -58,8 +67,9 @@ class Api {
       );
     }
     if (response.statusCode >= 400) {
-      throw Exception(
+      throw ApiException(
         data is Map ? data['error'] ?? 'Request failed.' : 'Request failed.',
+        response.statusCode,
       );
     }
     return data;

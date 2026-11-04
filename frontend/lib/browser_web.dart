@@ -7,6 +7,10 @@ void navigate(String url) {
   web.window.location.href = url;
 }
 
+void openExternal(String url) {
+  web.window.open(url, '_blank', 'noopener,noreferrer');
+}
+
 void download(String name, String text, [String type = 'text/csv']) {
   final blob = web.Blob([text.toJS].toJS, web.BlobPropertyBag(type: type));
   final url = web.URL.createObjectURL(blob);

@@ -4,10 +4,15 @@ import 'dart:async';
 import 'dart:convert';
 import 'package:flutter/material.dart';
 import 'api.dart';
+import 'whatsapp.dart';
+import 'invoice.dart';
 import 'browser.dart' as browser;
 part 'cashier.dart';
+part 'customers.dart';
 part 'records.dart';
 part 'management.dart';
+part 'login.dart';
+part 'workflow.dart';
 
 const mint = Color(0xffabdabb),
     green = Color(0xff22bf74),
@@ -23,7 +28,7 @@ class PosRoot extends StatelessWidget {
   const PosRoot({super.key});
   @override
   Widget build(BuildContext context) => MaterialApp(
-    title: 'Tailor Express ? POS',
+    title: 'Tailor Express POS',
     debugShowCheckedModeBanner: false,
     scaffoldMessengerKey: posMessenger,
     theme: ThemeData(
@@ -86,7 +91,7 @@ class PosApp extends StatefulWidget {
 class Field {
   final String key, label, initial;
   final List<String>? options;
-  final bool number, required, multiline;
+  final bool number, required, multiline, secret;
   const Field(
     this.key,
     this.label, {
@@ -95,6 +100,7 @@ class Field {
     this.number = false,
     this.required = false,
     this.multiline = false,
+    this.secret = false,
   });
 }
 
@@ -103,6 +109,13 @@ class AppState extends State<PosApp> {
   Json? boot, branch;
   List<Json> orders = [], payments = [], expenses = [], cart = [], docs = [];
   Json? customer, restored;
+  int jobOffset = 0, jobMatched = 0;
+  List<Json> jobs = [];
+  Json jobSummary = {}, adminSummary = {};
+  String trackingBranch = 'all',
+      jobFilter = 'All',
+      jobSearch = '',
+      draftTailorId = '';
   String? coupon;
   String category = 'Skirt',
       search = '',
@@ -121,12 +134,14 @@ class AppState extends State<PosApp> {
       invoiceKind = 'sale';
   int screen = 0, selected = -1, discount = 0, extra = 0, cartTab = 0;
   bool busy = false, loading = true, arabic = false;
+  bool authenticated = false, authChecked = false, needsSetup = false;
   String? failure;
   Timer? timer;
   Json get member => boot?['member'] ?? {};
   bool get isManager =>
       member['role'] == 'admin' || member['role'] == 'manager';
   bool get isAdmin => member['role'] == 'admin';
+  bool get isTailor => member['role'] == 'tailor';
   List<Json> get catalogue => maps(boot?['catalogue']);
   List<Json> get branches => maps(boot?['branches']);
   List<Json> get employees => maps(boot?['staff'])
@@ -176,6 +191,9 @@ class AppState extends State<PosApp> {
     try {
       await fn();
     } catch (e) {
+      if (e is ApiException && e.status == 401) {
+        update(() => authenticated = false);
+      }
       notice(e, error: true);
     } finally {
       update(() => busy = false);
@@ -185,9 +203,9 @@ class AppState extends State<PosApp> {
   @override
   void initState() {
     super.initState();
-    loadBoot();
+    checkSession();
     timer = Timer.periodic(const Duration(seconds: 60), (_) {
-      if (branch != null && !busy) {
+      if (authenticated && branch != null && !busy) {
         loadData().catchError((Object e) {
           notice(
             'Connection interrupted. Your cart is still open.',
@@ -211,8 +229,22 @@ class AppState extends State<PosApp> {
     });
     try {
       final data = Json.from(await Api.get('boot'));
+      if (boot != null &&
+          (data['member']['id'] != member['id'] ||
+              !AppState.maps(
+                data['branches'],
+              ).any((b) => b['id'] == branch?['id']))) {
+        clearCart();
+        branch = null;
+        orders = [];
+        payments = [];
+        expenses = [];
+      }
       update(() => boot = data);
       update(() => loading = false);
+      if (isTailor && branches.length == 1 && branch == null) {
+        branch = branches.first;
+      }
       if (branch == null) {
         await Future<void>.delayed(Duration.zero);
         await chooseBranch();
@@ -229,14 +261,46 @@ class AppState extends State<PosApp> {
   Future<void> loadData() async {
     if (branch == null) return;
     final target = branch!['id'];
-    final data = Json.from(
-      await Api.get('data?branch=$target&from=$from&to=$to'),
-    );
-    if (branch?['id'] != target) return;
+    final trackingTarget = isAdmin
+        ? (screen == 7 ? trackingBranch : 'all')
+        : target;
+    final query = screen == 7
+        ? '&status=${jobFilter == "All" ? "" : Uri.encodeComponent(jobFilter)}&offset=$jobOffset&q=${Uri.encodeComponent(jobSearch)}'
+        : '';
+    if (isTailor) {
+      final work = Json.from(await Api.get('tracking?branch=$target$query'));
+      if (branch?['id'] != target) return;
+      update(() {
+        jobs = maps(work['jobs']);
+        jobSummary = Json.from(work['summary'] ?? {});
+        jobMatched = work['matched'] ?? maps(work['jobs']).length;
+        orders = [];
+        payments = [];
+        expenses = [];
+      });
+      return;
+    }
+    final responses = await Future.wait([
+      Api.get('data?branch=$target&from=$from&to=$to'),
+      Api.get('tracking?branch=$trackingTarget$query'),
+      Api.get('dashboard?branch=${isAdmin ? 'all' : target}&from=$from&to=$to'),
+    ]);
+    if (branch?['id'] != target ||
+        trackingTarget !=
+            (isAdmin
+                ? (screen == 7 ? trackingBranch : 'all')
+                : branch?['id'])) {
+      return;
+    }
+    final data = Json.from(responses[0]), work = Json.from(responses[1]);
     update(() {
       orders = maps(data['orders']);
       payments = maps(data['payments']);
       expenses = maps(data['expenses']);
+      jobs = maps(work['jobs']);
+      jobSummary = Json.from(work['summary'] ?? {});
+      jobMatched = work['matched'] ?? maps(work['jobs']).length;
+      adminSummary = Json.from(responses[2]);
     });
   }
 
@@ -311,8 +375,10 @@ class AppState extends State<PosApp> {
                 child: Align(
                   alignment: Alignment.centerRight,
                   child: TextButton(
-                    onPressed: () =>
-                        browser.navigate('/signout-with-chatgpt?return_to=/'),
+                    onPressed: () async {
+                      Navigator.pop(ctx);
+                      await logout();
+                    },
                     child: const Text(
                       'Logout',
                       style: TextStyle(color: Colors.red),
@@ -349,6 +415,7 @@ class AppState extends State<PosApp> {
     selected = -1;
     keypad = '';
     draftId = uid();
+    draftTailorId = '';
   }
 
   Future<bool> confirm(String title, String message) async =>
@@ -436,6 +503,7 @@ class AppState extends State<PosApp> {
                                   )
                                 : TextFormField(
                                     controller: controllers[f.key],
+                                    obscureText: f.secret,
                                     decoration: InputDecoration(
                                       labelText: f.label,
                                     ),
@@ -459,8 +527,10 @@ class AppState extends State<PosApp> {
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 0, 24, 20),
-                child: Row(
-                  mainAxisAlignment: MainAxisAlignment.end,
+                child: Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 10,
+                  runSpacing: 8,
                   children: [
                     TextButton(
                       onPressed: () => Navigator.pop(ctx),
@@ -473,7 +543,9 @@ class AppState extends State<PosApp> {
                           formKey.currentState!.save();
                           Navigator.pop(ctx, {
                             for (final f in fields)
-                              f.key: controllers[f.key]!.text.trim(),
+                              f.key: f.secret
+                                  ? controllers[f.key]!.text
+                                  : controllers[f.key]!.text.trim(),
                           });
                         }
                       },
@@ -544,6 +616,22 @@ class AppState extends State<PosApp> {
 
   @override
   Widget build(BuildContext context) {
+    if (!authChecked) {
+      return const Scaffold(body: Center(child: CircularProgressIndicator()));
+    }
+    if (!authenticated) {
+      return LoginScreen(
+        needsSetup: needsSetup,
+        error: failure,
+        onSignedIn: () async {
+          update(() {
+            authenticated = true;
+            needsSetup = false;
+          });
+          await loadBoot();
+        },
+      );
+    }
     return Scaffold(
       body: SafeArea(
         child: Stack(
@@ -569,10 +657,9 @@ class AppState extends State<PosApp> {
                                 Text(failure!, textAlign: TextAlign.center),
                                 const SizedBox(height: 20),
                                 FilledButton(
-                                  onPressed: () => browser.navigate(
-                                    '/signin-with-chatgpt?return_to=/',
-                                  ),
-                                  child: const Text('Sign in with ChatGPT'),
+                                  onPressed: () =>
+                                      update(() => authenticated = false),
+                                  child: const Text('Back to sign in'),
                                 ),
                                 TextButton(
                                   onPressed: loadBoot,
@@ -591,6 +678,10 @@ class AppState extends State<PosApp> {
                             child: const Text('Select location'),
                           ),
                         )
+                      : isTailor
+                      ? (screen == 0 ? tailorDashboard() : trackingScreen())
+                      : screen == 7
+                      ? trackingScreen()
                       : screen == 2
                       ? cashier()
                       : screen == 0
@@ -617,10 +708,15 @@ class AppState extends State<PosApp> {
                           '© Tailor Express',
                           style: TextStyle(fontSize: 11, color: muted),
                         ),
-                        const Spacer(),
-                        Text(
-                          '${member['name'] ?? ''}  ·  ${member['role'] ?? ''}',
-                          style: const TextStyle(fontSize: 11, color: muted),
+                        const SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                            '${member['name'] ?? ''}  ·  ${roleLabel(member['role'] ?? '')}',
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                            textAlign: TextAlign.right,
+                            style: const TextStyle(fontSize: 11, color: muted),
+                          ),
                         ),
                       ],
                     ),
@@ -673,19 +769,19 @@ class AppState extends State<PosApp> {
         if (screen == 2)
           IconButton(
             tooltip: 'Dashboard',
-            onPressed: () => update(() => screen = 0),
+            onPressed: () => goScreen(0),
             icon: const Icon(Icons.dashboard_outlined),
           ),
         if (MediaQuery.sizeOf(context).width < 600)
           IconButton(
             tooltip: branchName,
-            onPressed: busy ? null : () => run(chooseBranch),
+            onPressed: busy ? null : chooseBranch,
             icon: const Icon(Icons.storefront_outlined, size: 20),
           ),
         if (MediaQuery.sizeOf(context).width >= 600)
           Flexible(
             child: TextButton.icon(
-              onPressed: busy ? null : () => run(chooseBranch),
+              onPressed: busy ? null : chooseBranch,
               icon: const Icon(Icons.storefront_outlined, size: 17),
               label: Text(branchName, overflow: TextOverflow.ellipsis),
             ),
@@ -704,10 +800,11 @@ class AppState extends State<PosApp> {
           tooltip: 'Account',
           onSelected: (v) {
             if (v == 'logout') {
-              browser.navigate('/signout-with-chatgpt?return_to=/');
+              logout();
             }
             if (v == 'refresh') run(loadData);
             if (v == 'admin') update(() => screen = 6);
+            if (v == 'password') changePassword();
           },
           itemBuilder: (_) => [
             PopupMenuItem(
@@ -721,6 +818,10 @@ class AppState extends State<PosApp> {
                 child: Text('Administration'),
               ),
             const PopupMenuItem(value: 'logout', child: Text('Logout')),
+            const PopupMenuItem(
+              value: 'password',
+              child: Text('Change password'),
+            ),
           ],
           icon: const Icon(Icons.account_circle_outlined, color: green),
         ),
@@ -735,6 +836,8 @@ class AppState extends State<PosApp> {
       'Sales List',
       'Petty Expenses',
       'Reports',
+      'Administration',
+      isTailor ? 'My Tracking' : 'Tracking',
     ];
     final icons = [
       Icons.dashboard_outlined,
@@ -743,6 +846,8 @@ class AppState extends State<PosApp> {
       Icons.format_list_bulleted,
       Icons.payments_outlined,
       Icons.assessment_outlined,
+      Icons.settings_outlined,
+      Icons.content_cut,
     ];
     return Container(
       height: 49,
@@ -752,9 +857,11 @@ class AppState extends State<PosApp> {
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 5),
         children: [
           for (final i
-              in (MediaQuery.sizeOf(context).width < 600
-                  ? [2, 0, 3, 1, 4, 5]
-                  : [0, 1, 2, 3, 4, 5]))
+              in (isTailor
+                  ? [0, 7]
+                  : MediaQuery.sizeOf(context).width < 600
+                  ? [2, 0, 3, 7, 1, 4, 5]
+                  : [0, 1, 2, 3, 7, 4, 5]))
             Padding(
               padding: const EdgeInsets.only(right: 8),
               child: TextButton.icon(
@@ -765,7 +872,7 @@ class AppState extends State<PosApp> {
                     borderRadius: BorderRadius.circular(5),
                   ),
                 ),
-                onPressed: () => update(() => screen = i),
+                onPressed: () => goScreen(i),
                 icon: Icon(icons[i], size: 17),
                 label: Text(names[i]),
               ),
@@ -803,6 +910,7 @@ Widget modalHeader(String title, BuildContext ctx, {bool close = true}) =>
           ),
           if (close)
             IconButton(
+              tooltip: 'Close',
               onPressed: () => Navigator.pop(ctx),
               icon: const Icon(Icons.cancel, color: Colors.redAccent),
             ),

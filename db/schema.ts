@@ -1,6 +1,7 @@
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
 export const members = sqliteTable('members', {
   id: text('id').primaryKey(), userId: text('user_id').unique(), email: text('email').notNull().unique(),
+  username: text('username').unique(),
   name: text('name').notNull(), role: text('role').notNull(), branches: text('branches').notNull(), active: integer('active').notNull().default(1),
 });
 export const customers = sqliteTable('customers', {
@@ -14,6 +15,8 @@ export const orders = sqliteTable('orders', {
   cashier: text('cashier').notNull(), cashierId: text('cashier_id').notNull(), staff: text('staff').notNull().default(''), aggregator: text('aggregator').notNull().default(''),
   status: text('status').notNull().default('Ongoing'), createdAt: text('created_at').notNull(), updatedAt: text('updated_at').notNull(),
   dueDate: text('due_date').notNull().default(''), version: integer('version').notNull().default(0), bookingId: text('booking_id'), externalId: text('external_id').unique(),
+  tailorId:text('tailor_id').references(()=>members.id), jobStatus:text('job_status').notNull().default('Pending'),
+  assignedAt:text('assigned_at').notNull().default(''), jobUpdatedAt:text('job_updated_at').notNull().default(''),
 });
 export const payments = sqliteTable('payments', {
   id: text('id').primaryKey(), orderId: text('order_id').notNull().references(() => orders.id), branch: text('branch').notNull(),
@@ -27,6 +30,10 @@ export const audit = sqliteTable('audit', {
   id: text('id').primaryKey(), branch: text('branch').notNull(), actor: text('actor').notNull(), action: text('action').notNull(), entity: text('entity').notNull(), detail: text('detail').notNull(), createdAt: text('created_at').notNull(),
 });
 export const prices = sqliteTable('prices', {id: text('id').primaryKey(), price: integer('price').notNull(), active: integer('active').notNull().default(1)});
+export const jobEvents=sqliteTable('job_events',{
+  id:text('id').primaryKey(),orderId:text('order_id').notNull().references(()=>orders.id),branch:text('branch').notNull(),
+  actor:text('actor').notNull(),actorName:text('actor_name').notNull(),action:text('action').notNull(),detail:text('detail').notNull(),createdAt:text('created_at').notNull(),
+});
 export const attachments = sqliteTable('attachments', {
   id: text('id').primaryKey(), branch: text('branch').notNull(), orderId: text('order_id'), name: text('name').notNull(), type: text('type').notNull(), objectKey: text('object_key').notNull(), createdAt: text('created_at').notNull(),
 });

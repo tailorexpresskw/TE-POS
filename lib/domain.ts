@@ -7,6 +7,10 @@ export const BRANCHES = [
 ];
 export const METHODS = ['Cash', 'K-NET', 'Visa / Mastercard', 'Bank transfer'];
 export const STATUSES = ['Ongoing','Prepared','Packed','Out for Delivery','Delivered','Closed'];
+export const JOB_STATUSES = ['Pending','In Progress','On Hold','Completed'];
+export const ROLES = ['admin','manager','reception','tailor'];
+export function canonicalRole(role:string) {return role==='cashier'?'reception':role;}
+export function isManagerRole(role:string) {return ['admin','manager'].includes(canonicalRole(role));}
 export const COUPONS = [{id:'dar-usha',name:'Dar Usha',percent:15}, {id:'family',name:'Family and Friends',percent:20}];
 export function check(condition: unknown, message: string, status=400): asserts condition {
   if (!condition) throw Object.assign(new Error(message), {status});

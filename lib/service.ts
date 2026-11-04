@@ -1,26 +1,25 @@
-import {env} from 'cloudflare:workers';
-import {getChatGPTUser} from '../app/chatgpt-auth';
-import source from './catalogue.json';
-import {BRANCHES, METHODS, STATUSES, COUPONS, check, integer, text, canAccess, calculate, kuwaitDay} from './domain';
+import source from './catalogue.json' with {type:'json'};
+import {BRANCHES, METHODS, STATUSES, COUPONS, JOB_STATUSES, ROLES, canonicalRole, isManagerRole, check, integer, text, canAccess, calculate, kuwaitDay} from './domain.ts';
 
-type Row = Record<string, any>;
+import {createTracking} from './tracking.ts';
+import type {Database, DocumentStore, Row} from './storage.ts';
+
+export function createService(runtime: {database: Database; bucket: DocumentStore; authenticate: (request:Request)=>Promise<{userId:string}|null>; setPassword:(id:string,password:string)=>Promise<void>}) {
 const now=()=>new Date().toISOString();
 const uuid=()=>crypto.randomUUID();
-const db=()=>{check(env.DB,'Database is not configured.',503); return env.DB;};
+const db=()=>runtime.database;
 const stmt=(sql:string,...args:any[])=>db().prepare(sql).bind(...args);
 async function all(sql:string,...args:any[]):Promise<Row[]> {return (await stmt(sql,...args).all()).results as Row[];}
 async function first(sql:string,...args:any[]):Promise<Row|null> {return stmt(sql,...args).first();}
 function log(branch:string, actor:Row, action:string, entity:string, detail='',whenChanged=false) {
   return stmt('INSERT INTO audit (id,branch,actor,action,entity,detail,created_at) SELECT ?,?,?,?,?,?,?'+(whenChanged?' WHERE changes()=1':''),uuid(),branch,actor.user_id,action,entity,detail,now());
 }
-export async function identity() {
-  const user=await getChatGPTUser(); check(user,'Sign in to continue.',401);
-  const email=user.email.toLowerCase();
-  // A newly registered Site is owner-private. Bootstrap only that initial owner.
-  await stmt("INSERT OR IGNORE INTO members (id,user_id,email,name,role,branches,active) SELECT 'owner',?,?,?,'admin','[]',1 WHERE NOT EXISTS (SELECT 1 FROM members)",user.userId,email,user.displayName).run();
-  await stmt('UPDATE members SET user_id=? WHERE email=? AND user_id IS NULL AND active=1',user.userId,email).run();
+const tracking=createTracking({all,first,stmt,db,log});
+async function identity(request:Request) {
+  const user=await runtime.authenticate(request); check(user,'Sign in to continue.',401);
   const member=await first('SELECT * FROM members WHERE user_id=? AND active=1',user.userId);
   check(member,'Your account has not been given staff access. Ask your administrator.',403);
+  member.role=canonicalRole(member.role);check(ROLES.includes(member.role),'Your role is not configured. Ask an administrator.',403);
   member.branches=JSON.parse(member.branches); return member;
 }
 function branchAccess(member:Row,branch:string) {check(canAccess(member as any,branch),'You do not have access to this branch.',403);}
@@ -31,7 +30,7 @@ async function catalogue() {
   return source.map(p=>({...p,...overrides.find(o=>o.id===p.id),active:overrides.find(o=>o.id===p.id)?.active??1}));
 }
 async function order(member:Row,id:string) {
-  const result=await first('SELECT * FROM orders WHERE id=?',id); check(result,'Sale not found.',404); branchAccess(member,result.branch); return result;
+  const result=await first('SELECT o.*,m.name tailor_name,m.active tailor_active FROM orders o LEFT JOIN members m ON m.id=o.tailor_id WHERE o.id=?',id); check(result,'Sale not found.',404); branchAccess(member,result.branch); return result;
 }
 function decode(row:Row) {return {...row,lines:JSON.parse(row.lines)};}
 function dateRange(url:URL) {
@@ -42,16 +41,28 @@ function dateRange(url:URL) {
 async function read(member:Row,path:string[],url:URL):Promise<any> {
   if(path[0]==='boot') {
     const staff=await all('SELECT id,name,role,branches,active FROM members WHERE active=1');
-    return {member,branches:BRANCHES.filter(b=>canAccess(member as any,b.id)),catalogue:await catalogue(),methods:METHODS,statuses:STATUSES,coupons:COUPONS,staff:staff.map(s=>({...s,branches:JSON.parse(s.branches)}))};
+    const visibleStaff=staff.map((s):Row=>({...s,role:canonicalRole(s.role),branches:JSON.parse(s.branches)})).filter(s=>member.role==='admin'||(member.role==='tailor'?s.id===member.id:s.branches.some((b:string)=>canAccess(member as any,b))));
+    return {member,branches:BRANCHES.filter(b=>canAccess(member as any,b.id)),catalogue:member.role==='tailor'?[]:await catalogue(),methods:member.role==='tailor'?[]:METHODS,statuses:STATUSES,jobStatuses:JOB_STATUSES,coupons:member.role==='tailor'?[]:COUPONS,staff:visibleStaff};
   }
+  if(path[0]==='tracking')return tracking.read(member,path[1],url);
+  tracking.office(member);
+  if(path[0]==='dashboard'){const [start,end]=dateRange(url);return tracking.dashboard(member,url,start,end);}
   if(path[0]==='customers') {
+    if(path[1]) {
+      const branch=text(url.searchParams.get('branch'),30);branchAccess(member,branch);
+      const customer=await first('SELECT * FROM customers WHERE id=?',text(path[1],100));check(customer,'Customer not found.',404);
+      const summary=await first("SELECT COUNT(*) bills,COALESCE(SUM(total),0) total,COALESCE(SUM(paid),0) paid,COALESCE(SUM(total-paid),0) due,MIN(created_at) first_bill,MAX(created_at) last_bill FROM orders WHERE customer_id=? AND branch=? AND kind='sale' AND status NOT IN ('Voided','Refunded')",customer.id,branch);
+      const history=await all("SELECT id,bill,branch,total,paid,status,created_at FROM orders WHERE customer_id=? AND branch=? AND kind='sale' ORDER BY created_at DESC LIMIT 100",customer.id,branch);
+      return {customer,summary,history};
+    }
     const q=text(url.searchParams.get('q'),100); if(!q) return [];
-    return all("SELECT * FROM customers WHERE instr(lower(name),lower(?))>0 OR instr(phone,?)>0 ORDER BY name LIMIT 30",q,q);
+    const digits=q.replace(/[^0-9]/g,'');
+    return all("SELECT * FROM customers WHERE instr(lower(name),lower(?))>0 OR instr(phone,?)>0 OR (?<>'' AND instr(replace(replace(replace(replace(replace(phone,' ',''),'-',''),'(',''),')',''),'+',''),?)>0) ORDER BY name LIMIT 30",q,q,digits,digits);
   }
   if(path[0]==='data') {
     const branch=text(url.searchParams.get('branch'),30); branchAccess(member,branch);
     const [start,end]=dateRange(url);
-    const sales=await all("SELECT * FROM orders WHERE branch=? AND ((created_at BETWEEN ? AND ?) OR kind IN ('held','quotation')) ORDER BY created_at DESC LIMIT 1000",branch,start,end);
+    const sales=await all("SELECT o.*,m.name tailor_name,m.active tailor_active FROM orders o LEFT JOIN members m ON m.id=o.tailor_id WHERE o.branch=? AND ((o.created_at BETWEEN ? AND ?) OR o.kind IN ('held','quotation')) ORDER BY o.created_at DESC LIMIT 1000",branch,start,end);
     return {orders:sales.map(decode),payments:await all('SELECT * FROM payments WHERE branch=? AND created_at BETWEEN ? AND ? ORDER BY created_at DESC LIMIT 5000',branch,start,end),expenses:await all('SELECT * FROM expenses WHERE branch=? AND created_at BETWEEN ? AND ? ORDER BY created_at DESC LIMIT 1000',branch,start,end)};
   }
   if(path[0]==='orders' && path[1]) {
@@ -60,14 +71,22 @@ async function read(member:Row,path:string[],url:URL):Promise<any> {
   }
   if(path[0]==='admin') {
     admin(member); const [start,end]=dateRange(url);
-    return {members:await all('SELECT id,email,name,role,branches,active FROM members ORDER BY role,name'),audit:await all('SELECT * FROM audit ORDER BY created_at DESC LIMIT 150'),summary:await all("SELECT branch,COUNT(*) count,SUM(total) total,SUM(paid) paid,SUM(total-paid) due FROM orders WHERE kind='sale' AND status NOT IN ('Voided','Refunded') AND created_at BETWEEN ? AND ? GROUP BY branch",start,end)};
+    return {members:(await all('SELECT id,email,username,name,role,branches,active FROM members ORDER BY role,name')).map(m=>({...m,role:canonicalRole(m.role)})),audit:await all('SELECT * FROM audit ORDER BY created_at DESC LIMIT 150'),summary:await all("SELECT branch,COUNT(*) count,SUM(total) total,SUM(paid) paid,SUM(total-paid) due FROM orders WHERE kind='sale' AND status NOT IN ('Voided','Refunded') AND created_at BETWEEN ? AND ? GROUP BY branch",start,end)};
   }
   check(false,'Endpoint not found.',404);
 }
 async function write(member:Row,path:string[],body:Row):Promise<any> {
+  if(path[0]==='tracking'&&path[1])return tracking.progress(member,path[1],body);
+  tracking.office(member);
   if(path[0]==='customers') {
     const name=text(body.name,100),phone=text(body.phone,30),address=text(body.address,500);
     check(name.length>0,'Enter a customer name.'); check(!phone || /^[+\d\s()-]{5,30}$/.test(phone),'Enter a valid phone number.');
+    if(body.branch)branchAccess(member,text(body.branch,30));
+    if(path[1]) {
+      const id=text(path[1],100);check(await first('SELECT id FROM customers WHERE id=?',id),'Customer not found.',404);
+      await db().batch([stmt('UPDATE customers SET name=?,phone=?,address=? WHERE id=?',name,phone,address,id),log(text(body.branch,30),member,'customer.updated',id)]);
+      return first('SELECT * FROM customers WHERE id=?',id);
+    }
     const id=uuid(); await db().batch([stmt('INSERT INTO customers (id,name,phone,address,created_at) VALUES (?,?,?,?,?)',id,name,phone,address,now()),log('',member,'customer.created',id)]);
     return {id,name,phone,address};
   }
@@ -77,7 +96,7 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
     const existing=await first('SELECT * FROM orders WHERE id=?',id);
     if(existing) {branchAccess(member,existing.branch); return decode(existing);}
     const kind=text(body.kind,20); check(['sale','held','quotation'].includes(kind),'Invalid order type.');
-    const totals=calculate(body,await catalogue(),member.role!=='cashier');
+    const totals=calculate(body,await catalogue(),isManagerRole(member.role));
     const paymentList=body.payments??[]; check(Array.isArray(paymentList)&&paymentList.length<=8,'Invalid payments.');
     const payments=paymentList.map((p:any)=>({amount:integer(p.amount,'Payment',1),method:text(p.method,40),reference:text(p.reference,120)}));
     check(payments.every(p=>METHODS.includes(p.method)),'Unknown payment method.');
@@ -85,6 +104,7 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
     const customer=body.customerId ? await first('SELECT * FROM customers WHERE id=?',text(body.customerId,100)) : null;
     check(!body.customerId || customer,'Customer not found.');
     const staff=text(body.staff,100); if(staff) {const s=await first('SELECT * FROM members WHERE id=? AND active=1',staff); check(s && canAccess({...s,branches:JSON.parse(s.branches)} as any,branch),'Employee is not assigned to this branch.');}
+    const tailorId=text(body.tailorId,100);await tracking.validateTailor(branch,tailorId);
     const timestamp=now(),b=BRANCHES.find(b=>b.id===branch)!;
     const bill=`${b.code}-${kuwaitDay().replaceAll('-','')}-${id.slice(-8).toUpperCase()}`;
     const sourceId=text(body.sourceId,100); let sourceOrder:Row|null=null;
@@ -95,7 +115,8 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
     if(sourceOrder) operations.push(stmt("UPDATE orders SET kind='converted',version=version+1 WHERE id=? AND kind IN ('held','quotation') AND version=? RETURNING id",sourceId,integer(body.sourceVersion,'Saved order version')));
     // A unique source marker makes conversion safe even when two tills resume the same draft.
     const externalId=sourceId?`converted:${sourceId}`:null;
-    operations.push(stmt('INSERT INTO orders (id,branch,bill,kind,customer_id,customer_name,phone,address,lines,subtotal,discount,extra,total,paid,notes,cashier,cashier_id,staff,aggregator,status,created_at,updated_at,due_date,version,external_id,coupon) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',id,branch,bill,kind,customer?.id??null,customer?.name??'Walk-in customer',customer?.phone??'',customer?.address??'',JSON.stringify(totals.lines),totals.subtotal,totals.discount,totals.extra,totals.total,paid,text(body.notes,4000),member.name,member.user_id,staff,text(body.aggregator,100),kind==='held'?'Held':kind==='quotation'?'Quotation':'Ongoing',timestamp,timestamp,text(body.dueDate,30),0,externalId,text(body.coupon,50)));
+    operations.push(stmt('INSERT INTO orders (id,branch,bill,kind,customer_id,customer_name,phone,address,lines,subtotal,discount,extra,total,paid,notes,cashier,cashier_id,staff,aggregator,status,created_at,updated_at,due_date,version,external_id,coupon,tailor_id,job_status,assigned_at,job_updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',id,branch,bill,kind,customer?.id??null,customer?.name??'Walk-in customer',customer?.phone??'',customer?.address??'',JSON.stringify(totals.lines),totals.subtotal,totals.discount,totals.extra,totals.total,paid,text(body.notes,4000),member.name,member.user_id,staff,text(body.aggregator,100),kind==='held'?'Held':kind==='quotation'?'Quotation':'Ongoing',timestamp,timestamp,text(body.dueDate,30),0,externalId,text(body.coupon,50),tailorId||null,'Pending',tailorId?timestamp:'',tailorId?timestamp:''));
+    if(tailorId&&kind==='sale')operations.push(tracking.event(member,{id,branch},'assigned',JSON.stringify({from:'',to:tailorId,note:'Assigned at invoicing'})));
     for(const p of payments) operations.push(stmt('INSERT INTO payments (id,order_id,branch,amount,method,reference,actor,created_at) VALUES (?,?,?,?,?,?,?,?)',uuid(),id,branch,p.amount,p.method,p.reference,member.user_id,timestamp));
     for(const doc of docs) operations.push(stmt('UPDATE attachments SET order_id=? WHERE id=?',id,doc));
     operations.push(log(branch,member,`${kind}.created`,id,sourceId?`Converted ${sourceId}`:''));
@@ -110,7 +131,8 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
     }
     check(version===sale.version,'This sale changed. Refresh and try again.',409);
     check(sale.kind==='sale','Only sales can be updated.');
-    if(action==='payment') {
+    if(action==='assign'){await tracking.assign(member,sale,body);}
+    else if(action==='payment') {
       check(!['Voided','Refunded'].includes(sale.status),'This sale is no longer payable.');
       const id=text(body.id,100); check(/^[a-zA-Z0-9-]{16,100}$/.test(id),'Missing payment identifier.');
       const duplicate=await first('SELECT * FROM payments WHERE id=?',id);
@@ -127,7 +149,7 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
       const status=text(body.status,40); check(STATUSES.includes(status),'Invalid status.');
       check(!['Voided','Refunded'].includes(sale.status),'This sale cannot change status.');
       const next=STATUSES.indexOf(status),current=STATUSES.indexOf(sale.status);
-      check(next===current+1 || member.role!=='cashier','Advance one status at a time.');
+      check(next===current+1 || isManagerRole(member.role),'Advance one status at a time.');
       check(status!=='Closed' || sale.paid===sale.total,'Collect the outstanding balance before closing.');
       const result=await db().batch([stmt('UPDATE orders SET status=?,version=version+1,updated_at=? WHERE id=? AND version=? RETURNING id',status,now(),sale.id,version),log(sale.branch,member,'sale.status',sale.id,status,true)]);
       check(result[0].results.length,'Sale changed. Refresh and try again.',409);
@@ -161,11 +183,22 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
     await db().batch([stmt('INSERT INTO expenses (id,branch,category,description,amount,method,actor,created_at) VALUES (?,?,?,?,?,?,?,?)',id,branch,category,description,amount,method,member.user_id,now()),log(branch,member,'expense.created',id)]); return {id};
   }
   if(path[0]==='members') {
-    admin(member); const name=text(body.name,100),email=text(body.email,200).toLowerCase(),role=text(body.role,20),branches=body.branches;
-    check(name&&/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email),'Enter a name and valid email.'); check(['admin','manager','cashier'].includes(role),'Invalid role.');
+    admin(member);
+    const existing=body.id?await first('SELECT * FROM members WHERE id=?',text(body.id,100)):null;
+    check(!body.id||existing,'Staff account not found.',404);
+    const name=text(body.name,100),email=text(existing?.email??body.email,200).toLowerCase(),role=canonicalRole(text(body.role,20)),branches=body.branches;
+    const username=text(body.username??existing?.username,50).toLowerCase();
+    check(name&&(username||(email&&!email.endsWith('@users.invalid')))&&(!email||/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)),'Enter a name and username.');
+    check(!username||/^[a-z0-9][a-z0-9._-]{2,49}$/.test(username),'Use a username with 3–50 letters, numbers, dots, hyphens or underscores.');
+    check(ROLES.includes(role),'Invalid role.');
     check(Array.isArray(branches)&&branches.every(b=>BRANCHES.some(x=>x.id===b)),'Invalid branch assignments.'); check(role==='admin'||branches.length>0,'Assign at least one branch.');
+    const password=body.password??'';check(typeof password==='string'&&password.length<=256,'Invalid password.'); check(body.id || password.length>=12,'Set an initial password with at least 12 characters.'); check(!password || password.length>=12,'Use a password with at least 12 characters.');
     const id=body.id?text(body.id,100):uuid(); check(id!=='owner','The initial owner cannot be changed.'); check(id!==member.id,'You cannot change your own access.');
-    await db().batch([stmt('INSERT INTO members (id,user_id,email,name,role,branches,active) VALUES (?,NULL,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET name=excluded.name,role=excluded.role,branches=excluded.branches,active=excluded.active',id,email,name,role,JSON.stringify(branches),body.active===0?0:1),log('',member,'staff.updated',id,JSON.stringify({email,role,branches,active:body.active}))]);return {id};
+    if(username)check(!await first('SELECT id FROM members WHERE username=? AND id<>?',username,id),'This username is already in use.',409);
+    if(email)check(!await first('SELECT id FROM members WHERE lower(email)=? AND id<>?',email,id),'This email is already in use.',409);
+    await db().batch([stmt('INSERT INTO members (id,user_id,email,username,name,role,branches,active) VALUES (?,NULL,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username,name=excluded.name,role=excluded.role,branches=excluded.branches,active=excluded.active',id,email||`${id}@users.invalid`,username||null,name,role,JSON.stringify(branches),body.active===0?0:1),log('',member,'staff.updated',id,JSON.stringify({username,email,role,branches,active:body.active}))]);
+    if(password)await runtime.setPassword(id,password);
+    return {id};
   }
   if(path[0]==='prices') {
     admin(member); const product=source.find(p=>p.id===body.id); check(product,'Item not found.'); const price=integer(body.price,'Price');
@@ -173,9 +206,9 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
   }
   check(false,'Endpoint not found.',404);
 }
-export async function api(request:Request,path:string[]) {
+async function api(request:Request,path:string[]) {
   try {
-    const member=await identity();
+    const member=await identity(request);
     if(request.method==='GET') return Response.json(await read(member,path,new URL(request.url)),{headers:{'Cache-Control':'no-store'}});
     check(request.method==='POST','Method not allowed.',405);
     // Same-origin requests only, including behind the hosting proxy.
@@ -185,28 +218,34 @@ export async function api(request:Request,path:string[]) {
     const body=JSON.parse(raw); check(body&&typeof body==='object'&&!Array.isArray(body),'Invalid request.');
     return Response.json(await write(member,path,body),{headers:{'Cache-Control':'no-store'}});
   } catch(error:any) {
-    const status=error.status??(error instanceof SyntaxError?400:500);
+    const conflict=String(error.message).includes('UNIQUE constraint failed');
+    const status=error.status??(error instanceof SyntaxError?400:conflict?409:500);
     if(status===500) console.error('POS request failed',error.message);
-    return Response.json({error:status===500?'The request could not be saved. Refresh and try again.':error.message},{status,headers:{'Cache-Control':'no-store'}});
+    return Response.json({error:status===500?'The request could not be saved. Refresh and try again.':conflict?'This record was already saved or changed. Refresh and try again.':error.message},{status,headers:{'Cache-Control':'no-store'}});
   }
 }
-export async function document(request:Request,id:string) {
+async function document(request:Request,id:string) {
   try {
-    const member=await identity(); check(env.BUCKET,'Document storage is not configured.',503);
+    const member=await identity(request);
     if(request.method==='GET') {
       const doc=await first('SELECT * FROM attachments WHERE id=?',id); check(doc,'Document not found.',404); branchAccess(member,doc.branch);
-      const file=await env.BUCKET.get(doc.object_key); check(file,'File not found.',404);
+      if(member.role==='tailor'){check(doc.order_id,'This document is not assigned to you.',403);await tracking.job(member,doc.order_id);}
+      const file=await runtime.bucket.get(doc.object_key); check(file,'File not found.',404);
       return new Response(file.body,{headers:{'Content-Type':doc.type,'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(doc.name)}`,'X-Content-Type-Options':'nosniff','Cache-Control':'private, no-store'}});
     }
     check(request.method==='POST','Method not allowed.',405);
+    tracking.office(member);
     const origin=request.headers.get('origin'); check(!origin||origin===new URL(request.url).origin,'Cross-origin write rejected.',403);
     const branch=new URL(request.url).searchParams.get('branch')??''; branchAccess(member,branch);
     const type=request.headers.get('content-type')??''; check(['image/jpeg','image/png','image/webp','application/pdf'].includes(type),'Upload a PDF, JPG, PNG or WebP.');
     check(Number(request.headers.get('content-length')??0)<=5*1024*1024,'Maximum file size is 5 MB.',413);
     const bytes=await request.arrayBuffer(); check(bytes.byteLength>0&&bytes.byteLength<=5*1024*1024,'Maximum file size is 5 MB.',413);
     const docId=uuid(),key=`documents/${branch}/${docId}`,name=text(request.headers.get('x-file-name')?decodeURIComponent(request.headers.get('x-file-name')!):'document',150);
-    await env.BUCKET.put(key,bytes,{httpMetadata:{contentType:type}});
-    try {await stmt('INSERT INTO attachments (id,branch,order_id,name,type,object_key,created_at) VALUES (?,?,NULL,?,?,?,?)',docId,branch,name,type,key,now()).run();} catch(e) {await env.BUCKET.delete(key);throw e;}
+    await runtime.bucket.put(key,bytes);
+    try {await stmt('INSERT INTO attachments (id,branch,order_id,name,type,object_key,created_at) VALUES (?,?,NULL,?,?,?,?)',docId,branch,name,type,key,now()).run();} catch(e) {await runtime.bucket.delete(key);throw e;}
     return Response.json({id:docId,name,type});
   } catch(e:any) {return Response.json({error:e.status?e.message:'Document operation failed.'},{status:e.status??500});}
+}
+
+return {api,document};
 }

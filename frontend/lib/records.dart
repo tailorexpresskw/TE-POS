@@ -9,6 +9,8 @@ extension Records on AppState {
   int sum(List<Json> rows, String key) =>
       rows.fold<int>(0, (s, r) => s + ((r[key] as num?)?.toInt() ?? 0));
   Widget dashboard() {
+    if (isAdmin) return adminDashboard();
+    if (isTailor) return tailorDashboard();
     final cards = [
       (
         'Total Sales',
@@ -56,6 +58,7 @@ extension Records on AppState {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
+          receptionActions(),
           Wrap(
             alignment: WrapAlignment.spaceBetween,
             crossAxisAlignment: WrapCrossAlignment.center,
@@ -460,7 +463,7 @@ extension Records on AppState {
                                       ),
                                     ],
                                   ),
-                                  onTap: () => run(() => receipt(o)),
+                                  onTap: () => receipt(o),
                                 ),
                                 DataCell(
                                   Column(
@@ -530,12 +533,21 @@ extension Records on AppState {
                                           size: 18,
                                           color: muted,
                                         ),
-                                        onPressed: () => run(() => receipt(o)),
+                                        onPressed: () => receipt(o),
                                       ),
                                       PopupMenuButton<String>(
                                         onSelected: (action) =>
                                             saleAction(o, action),
                                         itemBuilder: (_) => [
+                                          if (!quotations)
+                                            const PopupMenuItem(
+                                              value: 'assign',
+                                              child: Text('Assign tailor'),
+                                            ),
+                                          const PopupMenuItem(
+                                            value: 'whatsapp',
+                                            child: Text('WhatsApp invoice'),
+                                          ),
                                           if (quotations)
                                             const PopupMenuItem(
                                               value: 'resume',
@@ -637,6 +649,21 @@ extension Records on AppState {
     _ => Icons.format_list_bulleted,
   };
   Future<void> saleAction(Json original, String action) async {
+    if (action == 'assign') {
+      await run(() async {
+        await assignInvoice(original);
+      });
+      return;
+    }
+    if (action == 'whatsapp') {
+      await run(() async {
+        final o = Json.from(
+          (await Api.get('orders/${original['id']}'))['order'],
+        );
+        await shareInvoice(o);
+      });
+      return;
+    }
     if (action == 'resume') {
       await restore(original);
       return;
@@ -658,7 +685,7 @@ extension Records on AppState {
       return;
     }
     if (action == 'print') {
-      await run(() => receipt(original));
+      await receipt(original);
       return;
     }
     final o = Json.from((await Api.get('orders/${original['id']}'))['order']);
@@ -768,86 +795,156 @@ extension Records on AppState {
   }
 
   Future<void> receipt(Json sale) async {
-    final detail = Json.from(await Api.get('orders/${sale['id']}'));
-    final o = Json.from(detail['order']);
-    final ps = AppState.maps(detail['payments']);
-    final files = AppState.maps(detail['attachments']);
-    final lines = AppState.maps(o['lines']);
-    final branchTitle =
-        branches.where((b) => b['id'] == o['branch']).firstOrNull?['name'] ??
-        o['branch'];
-    final html =
-        '''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(o['bill'])}</title><style>body{font:13px Arial,sans-serif;color:#252738;max-width:76mm;margin:20px auto}h1{font-size:20px;text-align:center}h2{font-size:15px}p{margin:7px 0}table{width:100%;border-collapse:collapse}td,th{padding:8px 2px;border-bottom:1px solid #ddd;text-align:left;font-size:11px}.right{text-align:right}.small{font-size:11px;color:#666}button{padding:12px;width:100%}@media print{button{display:none}body{margin:0} @page{margin:5mm}}</style></head><body><h1>TAILOR EXPRESS</h1><p style="text-align:center">${escape(branchTitle)}</p><h2>${o['kind'] == 'quotation' ? 'Quotation' : 'Sales receipt'}</h2><p>${escape(o['bill'])}</p><p class="small">${escape(displayDate(o['created_at']))} · ${escape(o['cashier'])}</p><p>${escape(o['customer_name'])} ${escape(o['phone'])}</p><p class="small">${escape(o['address'])}</p><table><tr><th>Item</th><th>Qty</th><th class="right">KWD</th></tr>${lines.map((l) => '<tr><td>${escape(l['name'])}<br><span class="small">${escape(l['note'])}</span></td><td>${l['qty']}</td><td class="right">${money(l['price'] * l['qty'])}</td></tr>').join()}</table><p>Subtotal <span style="float:right">${money(o['subtotal'])}</span></p><p>Discount <span style="float:right">${money(o['discount'])}</span></p><p>Extra <span style="float:right">${money(o['extra'])}</span></p><p><b>Total KWD <span style="float:right">${money(o['total'])}</span></b></p><p>Paid <span style="float:right">${money(o['paid'])}</span></p><p>Balance due <span style="float:right">${['Voided', 'Refunded'].contains(o['status']) ? '0.000' : money(o['total'] - o['paid'])}</span></p>${ps.map((p) => '<p class="small">${escape(p['method'])}: ${money(p['amount'])} ${escape(p['reference'])}</p>').join()}<p>${escape(o['notes']).replaceAll('\n', '<br>')}</p>${o['due_date'].toString().isEmpty ? '' : '<p>Collection: ${escape(o['due_date'])}</p>'}<p>Status: ${escape(o['status'])}</p><p style="text-align:center">Thank you · شكراً لكم</p><button onclick="window.print()">Print receipt</button></body></html>''';
-    await modal(
-      o['bill'],
-      Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: [
-          const Text(
-            'TAILOR EXPRESS',
-            style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800),
-          ),
-          Text(branchTitle),
-          const SizedBox(height: 15),
-          Text('${o['customer_name']} · ${o['phone']}'),
-          Text(
-            displayDate(o['created_at']),
-            style: const TextStyle(color: muted),
-          ),
-          const Divider(height: 30),
-          ...lines.map(
-            (l) => Padding(
-              padding: const EdgeInsets.symmetric(vertical: 7),
-              child: Row(
-                children: [
-                  Expanded(
-                    child: Text(
-                      '${l['name']}\n${l['note']}',
-                      style: const TextStyle(fontSize: 12),
-                    ),
-                  ),
-                  Text('${l['qty']} × ${money(l['price'])}'),
-                  const SizedBox(width: 20),
-                  Text(money(l['qty'] * l['price'])),
-                ],
+    try {
+      final detail = Json.from(await Api.get('orders/${sale['id']}'));
+      var o = Json.from(detail['order']);
+      bool assigning = false;
+      final ps = AppState.maps(detail['payments']);
+      final files = AppState.maps(detail['attachments']);
+      final lines = AppState.maps(o['lines']);
+      final branchTitle =
+          branches.where((b) => b['id'] == o['branch']).firstOrNull?['name'] ??
+          o['branch'];
+      String html({bool mobile = false}) => invoiceHtml(
+        {
+          ...o,
+          'lines': lines
+              .map((l) => {...l, 'arabic': arabicService(l)})
+              .toList(),
+          'tailor_name':
+              o['tailor_name'] ??
+              tailorLabel(o['tailor_id'], fallback: 'Unassigned'),
+        },
+        branchTitle,
+        payments: ps,
+        mobile: mobile,
+        fontBase: Api.uri(
+          'boot',
+        ).resolve('/pos/assets/assets/fonts').toString(),
+      );
+      await modal(
+        o['bill'],
+        StatefulBuilder(
+          builder: (dialogContext, refresh) => Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Text(
+                'TAILOR EXPRESS',
+                style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800),
               ),
-            ),
+              Text(branchTitle),
+              const SizedBox(height: 15),
+              Text('${o['customer_name']} · ${o['phone']}'),
+              Text(
+                displayDate(o['created_at']),
+                style: const TextStyle(color: muted),
+              ),
+              const Divider(height: 30),
+              ...lines.map(
+                (l) => Padding(
+                  padding: const EdgeInsets.symmetric(vertical: 7),
+                  child: Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          '${l['name']}\n${l['note']}',
+                          style: const TextStyle(fontSize: 12),
+                        ),
+                      ),
+                      Text('${l['qty']} × ${money(l['price'])}'),
+                      const SizedBox(width: 20),
+                      Text(money(l['qty'] * l['price'])),
+                    ],
+                  ),
+                ),
+              ),
+              const Divider(height: 25),
+              Text(
+                'Discount: ${money(o['discount'])}  ·  Extra: ${money(o['extra'])}',
+                style: const TextStyle(color: muted),
+              ),
+              const SizedBox(height: 12),
+              moneyText(o['total'], size: 25),
+              Text('Paid: ${money(o['paid'])} · Status: ${o['status']}'),
+              ...ps.map(
+                (p) => Text(
+                  '${p['method']}: ${money(p['amount'])} · ${p['reference']}',
+                  style: const TextStyle(color: muted, fontSize: 11),
+                ),
+              ),
+              const SizedBox(height: 15),
+              Text(o['notes']),
+              if (o['due_date'] != '') Text('Collection: ${o['due_date']}'),
+              ...files.map(
+                (f) => TextButton.icon(
+                  onPressed: () => browser.navigate(
+                    Api.uri('documents/${f['id']}').toString(),
+                  ),
+                  icon: const Icon(Icons.attach_file, size: 16),
+                  label: Text(f['name']),
+                ),
+              ),
+              const SizedBox(height: 20),
+              if (o['kind'] == 'sale') ...[
+                Text(
+                  'Tailor: ${o['tailor_name'] ?? tailorLabel(o['tailor_id'], fallback: 'Unassigned')}',
+                ),
+                const Text(
+                  'Assign a tailor now, or leave unassigned and assign later from your dashboard.',
+                  style: TextStyle(color: muted, fontSize: 11),
+                ),
+                TextButton.icon(
+                  onPressed: assigning
+                      ? null
+                      : () async {
+                          refresh(() => assigning = true);
+                          try {
+                            final updated = await assignInvoice(o);
+                            if (updated != null && dialogContext.mounted) {
+                              refresh(() => o = updated);
+                            }
+                          } catch (e) {
+                            notice(e, error: true);
+                          } finally {
+                            if (dialogContext.mounted) {
+                              refresh(() => assigning = false);
+                            }
+                          }
+                        },
+                  icon: const Icon(Icons.content_cut, size: 17),
+                  label: const Text('Assign tailor'),
+                ),
+              ],
+              OutlinedButton.icon(
+                onPressed: assigning ? null : () => shareInvoice(o),
+                icon: const Icon(Icons.chat_outlined, size: 17),
+                label: const Text('WhatsApp invoice'),
+              ),
+              const SizedBox(height: 10),
+              OutlinedButton.icon(
+                onPressed: assigning
+                    ? null
+                    : () => browser.printHtml(html(mobile: true)),
+                icon: const Icon(Icons.picture_as_pdf_outlined, size: 17),
+                label: const Text('WhatsApp PDF / mobile layout'),
+              ),
+              const SizedBox(height: 10),
+              FilledButton.icon(
+                onPressed: assigning ? null : () => browser.printHtml(html()),
+                icon: const Icon(Icons.print_outlined),
+                label: const Text('Print receipt / Save PDF'),
+              ),
+            ],
           ),
-          const Divider(height: 25),
-          Text(
-            'Discount: ${money(o['discount'])}  ·  Extra: ${money(o['extra'])}',
-            style: const TextStyle(color: muted),
-          ),
-          const SizedBox(height: 12),
-          moneyText(o['total'], size: 25),
-          Text('Paid: ${money(o['paid'])} · Status: ${o['status']}'),
-          ...ps.map(
-            (p) => Text(
-              '${p['method']}: ${money(p['amount'])} · ${p['reference']}',
-              style: const TextStyle(color: muted, fontSize: 11),
-            ),
-          ),
-          const SizedBox(height: 15),
-          Text(o['notes']),
-          if (o['due_date'] != '') Text('Collection: ${o['due_date']}'),
-          ...files.map(
-            (f) => TextButton.icon(
-              onPressed: () =>
-                  browser.navigate(Api.uri('documents/${f['id']}').toString()),
-              icon: const Icon(Icons.attach_file, size: 16),
-              label: Text(f['name']),
-            ),
-          ),
-          const SizedBox(height: 20),
-          FilledButton.icon(
-            onPressed: () => browser.printHtml(html),
-            icon: const Icon(Icons.print_outlined),
-            label: const Text('Print receipt'),
-          ),
-        ],
-      ),
-      width: 650,
-    );
+        ),
+        width: 650,
+      );
+    } catch (e) {
+      if (e is ApiException && e.status == 401) {
+        update(() => authenticated = false);
+      }
+      notice(e, error: true);
+    }
   }
 
   Widget expensesScreen() => SingleChildScrollView(

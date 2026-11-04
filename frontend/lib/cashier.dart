@@ -198,28 +198,28 @@ extension Cashier on AppState {
               (c) => Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                 child: Material(
-                  color:category==c?mint:Colors.white,
-                  borderRadius:BorderRadius.circular(5),
+                  color: category == c ? mint : Colors.white,
+                  borderRadius: BorderRadius.circular(5),
                   child: ListTile(
-                  dense: true,
-                  visualDensity: const VisualDensity(vertical: -3),
-                  shape: RoundedRectangleBorder(
-                    borderRadius: BorderRadius.circular(5),
-                  ),
-                  selected: category == c,
-                  selectedTileColor: mint,
-                  title: Text(
-                    c == 'Ready itmes' ? 'Ready items' : c,
-                    style: const TextStyle(
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: ink,
+                    dense: true,
+                    visualDensity: const VisualDensity(vertical: -3),
+                    shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(5),
                     ),
-                  ),
-                  onTap: () => update(() {
-                    category = c;
-                    search = '';
-                  }),
+                    selected: category == c,
+                    selectedTileColor: mint,
+                    title: Text(
+                      c == 'Ready itmes' ? 'Ready items' : c,
+                      style: const TextStyle(
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                        color: ink,
+                      ),
+                    ),
+                    onTap: () => update(() {
+                      category = c;
+                      search = '';
+                    }),
                   ),
                 ),
               ),
@@ -469,12 +469,17 @@ extension Cashier on AppState {
         return;
       }
     }
+    final i = cart.indexWhere(
+      (l) =>
+          l['id'] == p['id'] && l['price'] == price && (l['note'] ?? '') == '',
+    );
+    if (i >= 0 && cart[i]['qty'] >= 999) {
+      notice('Maximum quantity is 999 per service line.', error: true);
+      return;
+    }
     update(() {
-      final i = cart.indexWhere(
-        (l) => l['id'] == p['id'] && l['price'] == price,
-      );
       if (i >= 0) {
-        cart[i]['qty'] = (cart[i]['qty'] as int) + 1;
+        cart[i]['qty'] += 1;
         selected = i;
       } else {
         cart.add({...p, 'qty': 1, 'price': price, 'note': ''});
@@ -482,6 +487,155 @@ extension Cashier on AppState {
       }
       keypad = '';
     });
+  }
+
+  Future<void> editService(int index) async {
+    update(() {
+      selected = index;
+      keypad = '';
+    });
+    final item = cart[index];
+    final product =
+        catalogue.where((p) => p['id'] == item['id']).firstOrNull ?? item;
+    final details = await serviceDetails(product, existing: item);
+    if (details != null &&
+        mounted &&
+        index < cart.length &&
+        identical(cart[index], item)) {
+      update(() => cart[index] = {...item, ...details});
+    }
+  }
+
+  Future<Json?> serviceDetails(Json product, {required Json existing}) async {
+    final qty = TextEditingController(text: '${existing['qty']}');
+    final price = TextEditingController(text: money(existing['price']));
+    final instructions = TextEditingController(text: existing['note'] ?? '');
+    final editablePrice = isManager || product['price'] == 0;
+    final key = GlobalKey<FormState>();
+    final result = await showDialog<Json>(
+      context: context,
+      builder: (ctx) => Dialog(
+        child: ConstrainedBox(
+          constraints: BoxConstraints(
+            maxWidth: 500,
+            maxHeight: MediaQuery.sizeOf(ctx).height - 60,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              modalHeader(product['name'], ctx),
+              Flexible(
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.all(22),
+                  child: Form(
+                    key: key,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text(
+                          arabicService(product),
+                          textDirection: TextDirection.rtl,
+                          style: const TextStyle(color: muted),
+                        ),
+                        const SizedBox(height: 16),
+                        TextFormField(
+                          controller: instructions,
+                          minLines: 3,
+                          maxLines: 5,
+                          maxLength: 1000,
+                          decoration: const InputDecoration(
+                            labelText: 'Service notes / measurements',
+                            hintText: 'Instructions for this garment only',
+                          ),
+                        ),
+                        const SizedBox(height: 18),
+                        Row(
+                          children: [
+                            Expanded(
+                              child: TextFormField(
+                                controller: qty,
+                                keyboardType: TextInputType.number,
+                                decoration: const InputDecoration(
+                                  labelText: 'Quantity',
+                                ),
+                                validator: (v) {
+                                  final n = int.tryParse(v ?? '');
+                                  return n != null && n >= 1 && n <= 999
+                                      ? null
+                                      : 'Use 1?999';
+                                },
+                              ),
+                            ),
+                            const SizedBox(width: 12),
+                            Expanded(
+                              child: TextFormField(
+                                controller: price,
+                                readOnly: !editablePrice,
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(
+                                      decimal: true,
+                                    ),
+                                decoration: InputDecoration(
+                                  labelText: 'Price (KWD)',
+                                  suffixIcon: !editablePrice
+                                      ? const Icon(Icons.lock_outline, size: 17)
+                                      : null,
+                                ),
+                                validator: (v) {
+                                  try {
+                                    parseMoney(v ?? '');
+                                    return null;
+                                  } catch (_) {
+                                    return 'Use a valid KWD price';
+                                  }
+                                },
+                              ),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+              ),
+              Padding(
+                padding: const EdgeInsets.all(18),
+                child: Wrap(
+                  alignment: WrapAlignment.end,
+                  spacing: 10,
+                  runSpacing: 8,
+                  children: [
+                    TextButton(
+                      onPressed: () => Navigator.pop(ctx),
+                      child: const Text('Cancel'),
+                    ),
+                    const SizedBox(width: 10),
+                    FilledButton(
+                      onPressed: () {
+                        if (key.currentState!.validate()) {
+                          Navigator.pop(ctx, <String, dynamic>{
+                            'qty': int.parse(qty.text),
+                            'price': parseMoney(price.text),
+                            'note': instructions.text.trim(),
+                          });
+                        }
+                      },
+                      child: const Text('Save service'),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+    Future<void>.delayed(const Duration(seconds: 1), () {
+      qty.dispose();
+      price.dispose();
+      instructions.dispose();
+    });
+    return result;
   }
 
   Widget cartArea() => Container(
@@ -544,10 +698,7 @@ extension Cashier on AppState {
                           ? const Color(0xffeff8f2)
                           : Colors.white,
                       child: InkWell(
-                        onTap: () => update(() {
-                          selected = index;
-                          keypad = '';
-                        }),
+                        onTap: () => editService(index),
                         child: Container(
                           padding: const EdgeInsets.fromLTRB(10, 7, 8, 7),
                           decoration: const BoxDecoration(
@@ -557,7 +708,7 @@ extension Cashier on AppState {
                             children: [
                               Expanded(
                                 child: InkWell(
-                                  onDoubleTap: () => lineNote(index),
+                                  onTap: () => editService(index),
                                   child: Column(
                                     crossAxisAlignment:
                                         CrossAxisAlignment.start,
@@ -903,18 +1054,6 @@ extension Cashier on AppState {
     }
   }
 
-  Future<void> lineNote(int i) async {
-    final result = await form('Item notes', [
-      Field(
-        'note',
-        'Instructions / measurements',
-        initial: cart[i]['note'],
-        multiline: true,
-      ),
-    ]);
-    if (result != null) update(() => cart[i]['note'] = result['note']);
-  }
-
   Future<void> orderNotes() async {
     final result = await form('Order Notes', [
       Field('notes', 'Order notes', initial: notes, multiline: true),
@@ -1062,125 +1201,6 @@ extension Cashier on AppState {
     );
   }
 
-  Future<void> selectCustomer() async {
-    final query = TextEditingController();
-    List<Json> results = [];
-    bool searching = false;
-    await showDialog<void>(
-      context: context,
-      builder: (ctx) => StatefulBuilder(
-        builder: (ctx, set) => Dialog(
-          child: ConstrainedBox(
-            constraints: const BoxConstraints(maxWidth: 580, maxHeight: 620),
-            child: Column(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                modalHeader('Customer', ctx),
-                Padding(
-                  padding: const EdgeInsets.all(20),
-                  child: Row(
-                    children: [
-                      Expanded(
-                        child: TextField(
-                          controller: query,
-                          decoration: const InputDecoration(
-                            labelText: 'Name or phone number',
-                          ),
-                          onSubmitted: (_) async {
-                            set(() => searching = true);
-                            try {
-                              final found = AppState.maps(
-                                await Api.get(
-                                  'customers?q=${Uri.encodeComponent(query.text)}',
-                                ),
-                              );
-                              set(() => results = found);
-                            } catch (e) {
-                              notice(e, error: true);
-                            } finally {
-                              set(() => searching = false);
-                            }
-                          },
-                        ),
-                      ),
-                      IconButton(
-                        onPressed: () async {
-                          set(() => searching = true);
-                          try {
-                            final found = AppState.maps(
-                              await Api.get(
-                                'customers?q=${Uri.encodeComponent(query.text)}',
-                              ),
-                            );
-                            set(() => results = found);
-                          } catch (e) {
-                            notice(e, error: true);
-                          } finally {
-                            set(() => searching = false);
-                          }
-                        },
-                        icon: const Icon(Icons.search),
-                      ),
-                    ],
-                  ),
-                ),
-                if (searching) const LinearProgressIndicator(),
-                Flexible(
-                  child: ListView(
-                    shrinkWrap: true,
-                    children: [
-                      ListTile(
-                        title: const Text('Walk-in customer'),
-                        onTap: () {
-                          update(() => customer = null);
-                          Navigator.pop(ctx);
-                        },
-                      ),
-                      ...results.map(
-                        (c) => ListTile(
-                          title: Text(c['name']),
-                          subtitle: Text(c['phone']),
-                          onTap: () {
-                            update(() => customer = c);
-                            Navigator.pop(ctx);
-                          },
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: FilledButton.icon(
-                    onPressed: () async {
-                      Navigator.pop(ctx);
-                      final result = await form('New customer', [
-                        const Field('name', 'Customer name', required: true),
-                        const Field('phone', 'Phone number'),
-                        const Field('address', 'Address', multiline: true),
-                      ]);
-                      if (result != null) {
-                        await run(() async {
-                          final saved = Json.from(
-                            await Api.post('customers', result),
-                          );
-                          update(() => customer = saved);
-                        });
-                      }
-                    },
-                    icon: const Icon(Icons.person_add_outlined, size: 18),
-                    label: const Text('Add customer'),
-                  ),
-                ),
-              ],
-            ),
-          ),
-        ),
-      ),
-    );
-    Future<void>.delayed(const Duration(seconds: 1), query.dispose);
-  }
-
   Future<void> uploadDocument() async {
     await run(() async {
       if (docs.length >= 10) throw Exception('Maximum 10 documents per order.');
@@ -1239,6 +1259,7 @@ extension Cashier on AppState {
     update(() {
       clearCart();
       restored = o;
+      draftTailorId = o['tailor_id'] ?? '';
       docs = AppState.maps(detail['attachments']);
       coupon = o['coupon']?.toString().isNotEmpty == true ? o['coupon'] : null;
       invoiceKind = 'sale';
@@ -1294,6 +1315,19 @@ extension Cashier on AppState {
                             style: const TextStyle(color: muted),
                           ),
                           const SizedBox(height: 20),
+                          TextButton.icon(
+                            onPressed: () async {
+                              final id = await chooseTailor(
+                                branch!['id'],
+                                draftTailorId,
+                              );
+                              if (id != null) set(() => draftTailorId = id);
+                            },
+                            icon: const Icon(Icons.content_cut, size: 17),
+                            label: Text(
+                              'Tailor: ${tailorLabel(draftTailorId)}',
+                            ),
+                          ),
                           DropdownButtonFormField<String>(
                             initialValue: method,
                             decoration: const InputDecoration(
@@ -1440,9 +1474,11 @@ extension Cashier on AppState {
       notice('Add an item first.');
       return;
     }
+    Json? savedInvoice;
     await run(() async {
       final data = <String, dynamic>{
         'id': draftId,
+        'tailorId': draftTailorId,
         'branch': branch!['id'],
         'kind': kind,
         'lines': cart,
@@ -1460,6 +1496,7 @@ extension Cashier on AppState {
         if (restored != null) 'sourceVersion': restored!['version'],
       };
       final order = Json.from(await Api.post('orders', data));
+      savedInvoice = order;
       update(clearCart);
       await loadData();
       notice(
@@ -1469,7 +1506,7 @@ extension Cashier on AppState {
             ? 'Quotation saved.'
             : 'Sale saved: ${order['bill']}',
       );
-      if (printReceipt) await receipt(order);
     });
+    if (printReceipt && savedInvoice != null) await receipt(savedInvoice!);
   }
 }

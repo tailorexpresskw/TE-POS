@@ -1,49 +1,26 @@
-# Dependencies
+# Node development dependencies and logs
 /node_modules/
-/.pnp
-.pnp.*
-# Keep authored Yarn tooling if the project adopts Yarn.
-/.yarn/*
-!/.yarn/patches/
-!/.yarn/plugins/
-!/.yarn/releases/
-!/.yarn/versions/
-
-# Generated builds and framework state
-/dist/
-/.next/
-/.vinext/
-/out/
-next-env.d.ts
-*.tsbuildinfo
-
-# Test output
-/coverage/
-
-# Package-manager logs
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.pnpm-debug.log*
 
-# Local environment and keys
+# Private runtime data and credentials
+/data/
 .env*
-.dev.vars*
+!.env.example
 *.pem
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
 
-# Checkout-local tool state
-/.wrangler/
-/.sites-runtime/
-
-# Workspace scaffolding and publication archives
-/.agents/
-/.codex/
+# Generated tests, packages and compiler files
 /outputs/
-/work/
-
-# OS metadata
-.DS_Store
+/coverage/
+*.tsbuildinfo
 /frontend/.dart_tool/
 /frontend/build/
 /frontend/.flutter-plugins-dependencies
-/public/pos/
+
+# Local editor and assistant state
+/.agents/
+/.codex/
+/work/
+.DS_Store

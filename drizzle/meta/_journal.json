@@ -15,6 +15,20 @@
       "when": 1793370150197,
       "tag": "0001_illegal_proudstar",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1793644671064,
+      "tag": "0002_famous_grey_gargoyle",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1793647224689,
+      "tag": "0003_usernames",
+      "breakpoints": true
     }
   ]
 }

@@ -22,7 +22,13 @@ void main() {
       final saved = <Json>[];
       Api.client = MockClient((request) async {
         dynamic result;
-        if (request.url.path.endsWith('/boot')) {
+        if (request.url.path.endsWith('/auth/status')) {
+          result = {
+            'authenticated': true,
+            'needsSetup': false,
+            'canSetup': true,
+          };
+        } else if (request.url.path.endsWith('/boot')) {
           result = {
             'member': {
               'id': 'owner',
