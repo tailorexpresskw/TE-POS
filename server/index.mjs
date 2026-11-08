@@ -5,6 +5,7 @@ import {fileURLToPath,pathToFileURL} from 'node:url';
 import {createService} from '../lib/service.ts';
 import {openStorage} from './storage.mjs';
 import {createAuth} from './auth.mjs';
+import {createPush} from './push.mjs';
 const root=fileURLToPath(new URL('..',import.meta.url));
 const types={'.html':'text/html; charset=utf-8','.js':'application/javascript; charset=utf-8','.json':'application/json; charset=utf-8','.wasm':'application/wasm','.svg':'image/svg+xml','.png':'image/png','.jpg':'image/jpeg','.ttf':'font/ttf','.otf':'font/otf','.css':'text/css; charset=utf-8','.txt':'text/plain; charset=utf-8'};
 function loopback(address){return ['127.0.0.1','::1','::ffff:127.0.0.1'].includes(address);}
@@ -15,7 +16,8 @@ export async function createApp(options={}) {
   const dataDirectory=path.resolve(options.dataDirectory??process.env.DATA_DIR??path.join(root,'data'));
   const storage=openStorage(dataDirectory,root),auth=createAuth(storage.sqlite,{secure:production||publicUrl?.startsWith('https://')});
   if(auth.needsSetup()&&(process.env.ADMIN_USERNAME||process.env.ADMIN_EMAIL)&&process.env.ADMIN_PASSWORD)await auth.createOwner({name:process.env.ADMIN_NAME||'Administrator',username:process.env.ADMIN_USERNAME,email:process.env.ADMIN_EMAIL,password:process.env.ADMIN_PASSWORD});
-  const service=createService({database:storage.database,bucket:storage.bucket,authenticate:auth.authenticate,setPassword:auth.setPassword});
+  const push=createPush(storage.sqlite,dataDirectory,{enabled:options.push!==false&&process.env.DISABLE_WEB_PUSH!=='1',sender:options.pushSender,publicUrl});
+  const service=createService({database:storage.database,bucket:storage.bucket,authenticate:auth.authenticate,setPassword:auth.setPassword,pushPublicKey:push.publicKey});
   const server=http.createServer(async(incoming,outgoing)=>{
     const security={'X-Content-Type-Options':'nosniff','X-Frame-Options':'DENY','Referrer-Policy':'same-origin'};
     try{
@@ -43,7 +45,7 @@ export async function createApp(options={}) {
       if(incoming.method==='HEAD')outgoing.end();else createReadStream(asset).pipe(outgoing);
     }catch(error){outgoing.writeHead(error.status??500,{...security,'Content-Type':'application/json','Cache-Control':'no-store'});outgoing.end(JSON.stringify({error:error.status?error.message:'The request could not be completed.'}));if(!error.status)console.error(error);}
   });
-  return {server,auth,storage,close:async()=>{if(server.listening)await new Promise(resolve=>server.close(resolve));storage.sqlite.close();}};
+  return {server,auth,storage,push,close:async()=>{if(server.listening)await new Promise(resolve=>server.close(resolve));await push.close();storage.sqlite.close();}};
 }
 if(process.argv[1]&&import.meta.url===pathToFileURL(path.resolve(process.argv[1])).href){
   const app=await createApp();

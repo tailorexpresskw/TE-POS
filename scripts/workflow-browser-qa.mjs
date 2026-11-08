@@ -14,11 +14,12 @@ await login('admin','qa.admin');
 async function post(route,body){const r=await fetch(base+'/api/'+route,{method:'POST',headers:{'Content-Type':'application/json',Cookie:'te_pos_session='+sessions.admin},body:JSON.stringify(body)});assert.equal(r.status,200,await r.clone().text());return r.json();}
 await post('members',{name:'QA Reception',email:'reception@qa.test',role:'reception',branches:['zahra'],password});
 await post('members',{name:'QA Manager',username:'qa.manager',role:'manager',branches:['zahra'],password});
+await post('members',{name:'QA Supervisor',username:'qa.supervisor',role:'supervisor',branches:['zahra','avenues'],password});
 const tailor=await post('members',{name:'QA Tailor',email:'tailor@qa.test',role:'tailor',branches:['zahra'],password});
-await post('members',{name:'Other Branch Tailor',email:'other@qa.test',role:'tailor',branches:['aventura'],password});
+await post('members',{name:'Other Branch Tailor',email:'other@qa.test',role:'tailor',branches:['avenues'],password});
 const customer=await post('customers',{name:'QA Customer',phone:'55551234',address:'Kuwait City'});
 await post('orders',{id:randomUUID(),branch:'zahra',kind:'sale',customerId:customer.id,tailorId:tailor.id,lines:[{id:'1001',qty:1,price:2000,note:'Hem to 90 cm'}],payments:[],dueDate:'2026-11-03',notes:'QA garment instructions'});
-await login('manager','qa.manager');await login('reception','reception@qa.test');await login('tailor','tailor@qa.test');
+await login('manager','qa.manager');await login('supervisor','qa.supervisor');await login('reception','reception@qa.test');await login('tailor','tailor@qa.test');
 const child=spawn(process.env.CHROME_BIN||'C:/Program Files/Google/Chrome/Application/chrome.exe',['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check','--remote-debugging-port=9334',`--user-data-dir=${path.join(output,'workflow-chrome-profile')}`,'about:blank'],{stdio:'ignore',windowsHide:true});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));let ws;
 try{
@@ -60,10 +61,24 @@ try{
     }finally{socket.close();}
   }
   const has=text=>`(document.body.innerText.includes(${JSON.stringify(text)})||[...document.querySelectorAll('input,textarea')].some(e=>(e.value||'').includes(${JSON.stringify(text)}))||[...document.querySelectorAll('[aria-label]')].some(e=>(e.getAttribute('aria-label')||'').includes(${JSON.stringify(text)})))`;
-  async function account(role){await send('Network.setCookie',{name:'te_pos_session',value:sessions[role],url:base,httpOnly:true,sameSite:'Strict'});await send('Page.navigate',{url:base+'/pos/'});await wait("!!document.querySelector('flt-semantics-placeholder')");await evaluate("document.querySelector('flt-semantics-placeholder').click()");if(role!=='tailor')await click('Zahra Complex');await wait(has(role==='admin'?'Admin Dashboard':role==='reception'?'Reception Dashboard':role==='manager'?'Branch Manager Dashboard':'Tailor Dashboard'));await sleep(400);}
+  async function account(role){await send('Network.setCookie',{name:'te_pos_session',value:sessions[role],url:base,httpOnly:true,sameSite:'Strict'});await send('Page.navigate',{url:base+'/pos/'});await wait("!!document.querySelector('flt-semantics-placeholder')");await evaluate("document.querySelector('flt-semantics-placeholder').click()");if(role!=='tailor')await click('Zahra Complex');await wait(has(role==='admin'?'Admin Dashboard':role==='reception'?'Reception Dashboard':role==='manager'?'Branch Manager Dashboard':role==='supervisor'?'Supervisor Dashboard':'Tailor Dashboard'));await sleep(400);}
   await send('Page.enable');await send('Runtime.enable');await send('Network.enable');await send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   await account('admin');await screenshot('admin-dashboard');
+  await wait('!!navigator.serviceWorker.controller');
+  const appManifest=await send('Page.getAppManifest');assert.equal(JSON.parse(appManifest.data).display,'standalone');
+  const installability=await send('Page.getInstallabilityErrors');assert.deepEqual(installability.installabilityErrors,[],'Chrome PWA install requirements');
+  const cached=await evaluate("(async()=>{const names=await caches.keys();const urls=[];for(const name of names.filter(n=>n.startsWith('te-pos-offline-'))){const cache=await caches.open(name);urls.push(...(await cache.keys()).map(r=>new URL(r.url).pathname));}return urls;})()");
+  assert.ok(cached.includes('/pos/offline.html'));assert.ok(cached.every(url=>!url.startsWith('/api/')));
+  await click('Manage users');await click('Add branch');await wait(has('Invoice code'));await screenshot('admin-add-branch');await click('Cancel');
+  // Widget tests exercise both fields and form submission; seed this browser fixture through the API.
+  await post('branches',{name:'QA New Branch',code:'NB'});await account('admin');await click('Manage users');await wait(has('QA New Branch'));
+  const adminBranches=await evaluate("fetch('/api/boot').then(r=>r.json()).then(b=>b.branches)");assert.ok(adminBranches.some(b=>b.name==='QA New Branch'));assert.ok(!adminBranches.some(b=>b.id==='aventura'));await screenshot('admin-branches');
+
   await account('manager');assert.equal(await evaluate(has('Administration')),false);await screenshot('manager-dashboard');
+  await account('supervisor');assert.equal(await evaluate(has('Administration')),false);assert.equal(await evaluate(has('Manage users')),false);await wait(has('Assigned branches'));await screenshot('supervisor-dashboard');
+  const supervised=await evaluate("fetch('/api/boot').then(r=>r.json()).then(b=>b.branches.map(b=>b.id))");assert.deepEqual(supervised.sort(),['avenues','zahra']);
+  await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await sleep(500);await screenshot('supervisor-dashboard-phone');
+  await send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   await account('reception');await screenshot('reception-dashboard');await click('POS');await wait(has('Hem- Skirt'));await screenshot('reception-pos');await click('Walk-in customer');await fill('Find customer','55551234');await click('QA Customer');await wait(has('Last bill date'));await screenshot('customer-details');await click('Select customer');await click('Hem- Skirt');assert.equal(await evaluate(has('Service notes / measurements')),false);await evaluate("[...document.querySelectorAll('[role=button]')].filter(e=>(e.getAttribute('aria-label')||e.textContent||'').trim().split(String.fromCharCode(10))[0].trim()==='Hem- Skirt').at(-1).click()");await wait(has('Service notes / measurements'));await screenshot('service-notes');await click('Cancel');await click('Dashboard');await click('Tracking');await wait(has('Tailor Tracking & Assignment'));await screenshot('reception-tracking');
   await click('Invoice / WhatsApp');await wait(has('WhatsApp invoice'));await screenshot('invoice-assignment');
   await click('Assign tailor');await wait(has('Assign later / Unassigned'));assert.equal(await evaluate(has('Other Branch Tailor')),false);
@@ -73,9 +88,11 @@ try{
   await exportInvoice('WhatsApp PDF / mobile layout','invoice-whatsapp',390);
   await click('WhatsApp invoice');await wait(has('Save WhatsApp PDF'));await screenshot('whatsapp-invoice-dialog');
   await account('tailor');await screenshot('tailor-dashboard');
+  await click('Notifications');await wait(has('New tailor assignment'));await screenshot('notification-inbox');await click('Mark all as read');await click('Close');
+
   const body=await evaluate('document.body.innerText');assert.ok(!body.includes('Total Sales')&&!body.includes('Administration'));
   await click('My Tracking');await wait(has('My Tailor Tracking'));await click('Update progress');await wait(has('Work status'));await click('Save');await wait(has('Tracking updated.'));
   await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await sleep(500);await screenshot('tailor-tracking-phone');
-  assert.deepEqual(errors,[],'Browser runtime exceptions');console.log('Chrome workflow QA passed: role dashboards, branch-only picker, assign later, reassign at printing, tailor progress, customer details, service notes and both invoice PDFs. No WhatsApp messages were sent.');
+  assert.deepEqual(errors,[],'Browser runtime exceptions');console.log('Chrome workflow QA passed: role dashboards, branch-only picker, assign later, reassign at printing, tailor progress, customer details, service notes both invoice PDFs, installability, service-worker privacy and the notification inbox. No WhatsApp messages were sent.');
   await send('Browser.close').catch(()=>{});
 }finally{ws?.close();if(child.exitCode===null)child.kill();await app.close();}

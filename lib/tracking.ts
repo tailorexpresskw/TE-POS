@@ -1,18 +1,21 @@
-import {BRANCHES,JOB_STATUSES,canonicalRole,isManagerRole,canAccess,check,text,integer,kuwaitDay} from './domain.ts';
+import {JOB_STATUSES,canonicalRole,isManagerRole,canAccess,check,text,integer,kuwaitDay} from './domain.ts';
 import type {Database, Statement, Row} from './storage.ts';
-export function createTracking(deps:{all:(sql:string,...args:any[])=>Promise<Row[]>;first:(sql:string,...args:any[])=>Promise<Row|null>;stmt:(sql:string,...args:any[])=>Statement;db:()=>Database;log:(branch:string,actor:Row,action:string,id:string,detail?:string,conditional?:boolean)=>Statement}){
+import type {createNotifications} from './notifications.ts';
+export function createTracking(deps:{all:(sql:string,...args:any[])=>Promise<Row[]>;first:(sql:string,...args:any[])=>Promise<Row|null>;stmt:(sql:string,...args:any[])=>Statement;db:()=>Database;log:(branch:string,actor:Row,action:string,id:string,detail?:string,conditional?:boolean)=>Statement;notifications:ReturnType<typeof createNotifications>;branchList:()=>Promise<Row[]>;branchAccess:(member:Row,branch:string,historical?:boolean)=>Promise<Row>}){
   const {all,first,stmt,db,log}=deps;
-  const office=(member:Row)=>check(['admin','manager','reception'].includes(canonicalRole(member.role)),'Reception or administrator access required.',403);
-  function scope(member:Row,url:URL){
-    const branch=text(url.searchParams.get('branch')??(member.role==='admin'?'all':member.branches[0]),30);
-    if(branch==='all')check(member.role==='admin','Only an administrator can view all branches.',403);
-    else check(canAccess(member as any,branch),'You do not have access to this branch.',403);
-    return branch;
+  const office=(member:Row)=>check(['admin','manager','supervisor','reception'].includes(canonicalRole(member.role)),'Reception or administrator access required.',403);
+  async function scope(member:Row,url:URL){
+    const multi=member.role==='admin'||member.role==='supervisor';
+    const branch=text(url.searchParams.get('branch')??(multi?'all':member.branches[0]),100);
+    if(branch==='all')check(multi,'Only an administrator or supervisor can view multiple branches.',403);
+    else await deps.branchAccess(member,branch,true);
+    const available=await deps.branchList();
+    return available.filter(b=>(branch==='all'||b.id===branch)&&canAccess(member as any,b.id,available)&&(b.active===1||member.role==='admin'));
   }
   async function validateTailor(branch:string,id:string){
     if(!id)return null;
     const target=await first('SELECT * FROM members WHERE id=? AND active=1',id);
-    check(target&&canonicalRole(target.role)==='tailor'&&canAccess({...target,branches:JSON.parse(target.branches)} as any,branch),'Select an active tailor assigned to this invoice’s branch.',400);
+    check(target&&canonicalRole(target.role)==='tailor'&&canAccess({...target,branches:JSON.parse(target.branches)} as any,branch,[{id:branch}]),'Select an active tailor assigned to this invoice’s branch.',400);
     return target;
   }
   function publicJob(row:Row){return {
@@ -23,15 +26,14 @@ export function createTracking(deps:{all:(sql:string,...args:any[])=>Promise<Row
   };}
   async function job(member:Row,id:string){
     const row=await first("SELECT o.*,m.name tailor_name,m.active tailor_active FROM orders o LEFT JOIN members m ON m.id=o.tailor_id WHERE o.id=? AND o.kind='sale' AND o.status NOT IN ('Voided','Refunded')",id);
-    check(row,'Job not found.',404);check(canAccess(member as any,row.branch),'You do not have access to this branch.',403);
+    check(row,'Job not found.',404);await deps.branchAccess(member,row.branch,true);
     if(member.role==='tailor')check(row.tailor_id===member.id,'This job is not assigned to you.',403);
     return row;
   }
   async function read(member:Row,id:string|undefined,url:URL){
     if(id){const row=await job(member,id);return {job:publicJob(row),events:await all('SELECT actor_name,action,detail,created_at FROM job_events WHERE order_id=? ORDER BY created_at DESC,id DESC LIMIT 100',id),attachments:await all('SELECT id,name,type FROM attachments WHERE order_id=?',id)};}
-    const branch=scope(member,url),args:any[]=[];
-    let where="o.kind='sale' AND o.status NOT IN ('Voided','Refunded')";
-    if(branch!=='all'){where+=' AND o.branch=?';args.push(branch);}
+    const branches=await scope(member,url),args:any[]=branches.map(b=>b.id);
+    let where=`o.kind='sale' AND o.status NOT IN ('Voided','Refunded') AND o.branch IN (${args.map(()=>'?').join(',')||'NULL'})`;
     if(member.role==='tailor'){where+=' AND o.tailor_id=?';args.push(member.id);}
     const counts=await first(`SELECT COUNT(*) total,COALESCE(SUM(o.tailor_id IS NULL),0) unassigned,COALESCE(SUM(o.job_status='Pending'),0) pending,COALESCE(SUM(o.job_status='In Progress'),0) in_progress,COALESCE(SUM(o.job_status='On Hold'),0) on_hold,COALESCE(SUM(o.job_status='Completed'),0) completed,COALESCE(SUM(o.job_status!='Completed' AND o.due_date!='' AND o.due_date<?),0) overdue FROM orders o WHERE ${where}`,kuwaitDay(),...args);
     const status=text(url.searchParams.get('status'),30);
@@ -43,9 +45,9 @@ export function createTracking(deps:{all:(sql:string,...args:any[])=>Promise<Row
     const rows=await all(`SELECT o.*,m.name tailor_name,m.active tailor_active FROM orders o LEFT JOIN members m ON m.id=o.tailor_id WHERE ${where} ORDER BY (o.job_status='Completed'),(o.due_date=''),o.due_date,o.created_at LIMIT 500 OFFSET ?`,...args,offset);
     return {jobs:rows.map(publicJob),summary:counts,limit:500,offset,matched:matched?.count??0};
   }
-  function event(member:Row,sale:Row,action:string,detail:string,conditional=false){return stmt('INSERT INTO job_events (id,order_id,branch,actor,actor_name,action,detail,created_at) SELECT ?,?,?,?,?,?,?,?'+(conditional?' WHERE changes()=1':''),crypto.randomUUID(),sale.id,sale.branch,member.id,member.name,action,detail,new Date().toISOString());}
+  function event(member:Row,sale:Row,action:string,detail:string,conditional=false,eventId=crypto.randomUUID() as string){return stmt('INSERT INTO job_events (id,order_id,branch,actor,actor_name,action,detail,created_at) SELECT ?,?,?,?,?,?,?,?'+(conditional?' WHERE changes()=1':''),eventId,sale.id,sale.branch,member.id,member.name,action,detail,new Date().toISOString());}
   async function assign(member:Row,sale:Row,body:Row){
-    office(member);check(canAccess(member as any,sale.branch),'You do not have access to this branch.',403);
+    office(member);await deps.branchAccess(member,sale.branch);
     check(sale.kind==='sale'&&!['Voided','Refunded'].includes(sale.status),'This invoice cannot be assigned.');
     const id=text(body.tailorId,100),reason=text(body.reason,1000);await validateTailor(sale.branch,id);
     if((sale.tailor_id??'')===id)return;
@@ -53,7 +55,8 @@ export function createTracking(deps:{all:(sql:string,...args:any[])=>Promise<Row
     const detail=JSON.stringify({from:sale.tailor_id??'',to:id,previousStatus:sale.job_status,note:reason}),time=new Date().toISOString();
     const result=await db().batch([
       stmt("UPDATE orders SET tailor_id=?,assigned_at=?,job_status='Pending',job_updated_at=?,updated_at=?,version=version+1 WHERE id=? AND branch=? AND version=? RETURNING id",id||null,id?time:'',time,time,sale.id,sale.branch,integer(body.version,'Version')),
-      event(member,sale,'assigned',detail,true),log(sale.branch,member,'job.assigned',sale.id,detail,true),
+      event(member,sale,'assigned',detail,true,`assigned:${sale.id}:${body.version+1}`),log(sale.branch,member,'job.assigned',sale.id,detail,true),
+      deps.notifications.assigned(sale.id,body.version+1,member.id),
     ]);check(result[0].results.length,'This invoice changed. Refresh and try again.',409);
   }
   async function progress(member:Row,id:string,body:Row){
@@ -71,17 +74,18 @@ export function createTracking(deps:{all:(sql:string,...args:any[])=>Promise<Row
     const detail=JSON.stringify({from:sale.job_status,to:status,note}),time=new Date().toISOString();
     const result=await db().batch([
       stmt('UPDATE orders SET job_status=?,job_updated_at=?,updated_at=?,version=version+1 WHERE id=? AND version=? AND tailor_id=? RETURNING id',status,time,time,sale.id,version,sale.tailor_id),
-      event(member,sale,action,detail,true),log(sale.branch,member,`job.${action}`,sale.id,detail,true),
+      event(member,sale,action,detail,true,`${action}:${sale.id}:${version+1}`),log(sale.branch,member,`job.${action}`,sale.id,detail,true),
+      ...(['Completed','On Hold'].includes(status)&&action==='progress'?[deps.notifications.progress(sale.id,version+1,status,member.id)]:[]),
     ]);check(result[0].results.length,'This job was updated or reassigned. Refresh and try again.',409);
     return publicJob((await job(member,id))!);
   }
   async function dashboard(member:Row,url:URL,start:string,end:string){
-    office(member);const branch=scope(member,url),filter=branch==='all'?'':' AND branch=?',args=branch==='all'?[]:[branch];
+    office(member);const branches=await scope(member,url),args=branches.map(b=>b.id),filter=` AND branch IN (${args.map(()=>'?').join(',')||'NULL'})`;
     const invoices=await all(`SELECT branch,COUNT(*) invoices,COALESCE(SUM(total),0) total,COALESCE(SUM(paid),0) paid,COALESCE(SUM(total-paid),0) due FROM orders WHERE kind='sale' AND status NOT IN ('Voided','Refunded') AND created_at BETWEEN ? AND ?${filter} GROUP BY branch`,start,end,...args);
     const received=await all(`SELECT branch,SUM(amount) received FROM payments WHERE created_at BETWEEN ? AND ?${filter} GROUP BY branch`,start,end,...args);
     const expenses=await all(`SELECT branch,SUM(amount) expenses FROM expenses WHERE created_at BETWEEN ? AND ?${filter} GROUP BY branch`,start,end,...args);
     const jobs=await all(`SELECT branch,SUM(tailor_id IS NULL) unassigned,SUM(job_status!='Completed') open_jobs,SUM(job_status='Completed') completed FROM orders WHERE kind='sale' AND status NOT IN ('Voided','Refunded')${filter} GROUP BY branch`,...args);
-    const rows=BRANCHES.filter(b=>branch==='all'||b.id===branch).map(b=>({id:b.id,name:b.name,invoices:0,total:0,paid:0,due:0,received:0,expenses:0,unassigned:0,open_jobs:0,completed:0,...invoices.find(r=>r.branch===b.id),...received.find(r=>r.branch===b.id),...expenses.find(r=>r.branch===b.id),...jobs.find(r=>r.branch===b.id)}));
+    const rows=branches.map(b=>({id:b.id,name:b.name,active:b.active,invoices:0,total:0,paid:0,due:0,received:0,expenses:0,unassigned:0,open_jobs:0,completed:0,...invoices.find(r=>r.branch===b.id),...received.find(r=>r.branch===b.id),...expenses.find(r=>r.branch===b.id),...jobs.find(r=>r.branch===b.id)})).filter(b=>b.active===1||b.invoices||b.received||b.expenses||b.open_jobs||b.completed);
     const totals=Object.fromEntries(['invoices','total','paid','due','received','expenses','unassigned','open_jobs','completed'].map(k=>[k,rows.reduce((n,r)=>n+Number((r as Row)[k]??0),0)]));
     return {branches:rows,totals};
   }

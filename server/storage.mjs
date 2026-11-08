@@ -18,7 +18,11 @@ export function openStorage(directory,root) {
     CREATE INDEX IF NOT EXISTS sessions_member ON sessions(member_id);
     CREATE INDEX IF NOT EXISTS orders_branch_created ON orders(branch,created_at);
     CREATE INDEX IF NOT EXISTS payments_branch_created ON payments(branch,created_at);
-    CREATE INDEX IF NOT EXISTS expenses_branch_created ON expenses(branch,created_at);`);
+    CREATE INDEX IF NOT EXISTS expenses_branch_created ON expenses(branch,created_at);
+    CREATE INDEX IF NOT EXISTS notifications_member_created ON notifications(member_id,created_at);
+    CREATE INDEX IF NOT EXISTS push_subscriptions_member ON push_subscriptions(member_id);
+    CREATE INDEX IF NOT EXISTS push_deliveries_notification ON push_deliveries(notification_id);
+    CREATE INDEX IF NOT EXISTS push_deliveries_subscription ON push_deliveries(subscription_id);`);
   const statement=(sql,args=[])=>({
     bind(...values){return statement(sql,values);},
     _execute(){const results=sqlite.prepare(sql).all(...args);return {success:true,results,meta:{changes:sqlite.prepare('SELECT changes() AS n').get().n}};},

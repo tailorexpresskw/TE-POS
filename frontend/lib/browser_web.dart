@@ -3,6 +3,30 @@ import 'dart:js_interop';
 import 'dart:typed_data';
 import 'package:web/web.dart' as web;
 
+@JS('tePos.install')
+external JSPromise<JSString> _installApp();
+@JS('tePos.state')
+external JSPromise<JSString> _notificationState();
+@JS('tePos.subscribe')
+external JSPromise<JSString> _subscribeNotifications(JSString publicKey);
+@JS('tePos.subscription')
+external JSPromise<JSString> _pushSubscription();
+@JS('tePos.unsubscribe')
+external JSPromise<JSString> _unsubscribeNotifications();
+@JS('tePos.consumeOpen')
+external JSBoolean _consumeNotificationOpen();
+
+Future<String> installApp() async => (await _installApp().toDart).toDart;
+Future<String> deviceNotificationState() async =>
+    (await _notificationState().toDart).toDart;
+Future<String> subscribeNotifications(String publicKey) async =>
+    (await _subscribeNotifications(publicKey.toJS).toDart).toDart;
+Future<String> currentPushSubscription() async =>
+    (await _pushSubscription().toDart).toDart;
+Future<String> unsubscribeNotifications() async =>
+    (await _unsubscribeNotifications().toDart).toDart;
+bool consumeNotificationOpen() => _consumeNotificationOpen().toDart;
+
 void navigate(String url) {
   web.window.location.href = url;
 }

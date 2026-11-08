@@ -6,6 +6,7 @@ String roleLabel(dynamic value) => switch (value) {
   'reception' || 'cashier' => 'Reception',
   'tailor' => 'Tailor',
   'manager' => 'Branch Manager',
+  'supervisor' => 'Supervisor',
   _ => '$value',
 };
 
@@ -30,7 +31,11 @@ extension Workflow on AppState {
   }
 
   String branchLabel(dynamic id) =>
-      branches.where((b) => b['id'] == id).firstOrNull?['name'] ?? '$id';
+      branches.where((b) => b['id'] == id).firstOrNull?['name'] ??
+      AppState.maps(
+        adminSummary['branches'],
+      ).where((b) => b['id'] == id).firstOrNull?['name'] ??
+      '$id';
   String tailorLabel(dynamic id, {String fallback = 'Assign later'}) =>
       AppState.maps(
         boot?['staff'],
@@ -192,17 +197,24 @@ extension Workflow on AppState {
             runSpacing: 12,
             crossAxisAlignment: WrapCrossAlignment.center,
             children: [
-              const Text(
-                'Admin Dashboard',
-                style: TextStyle(fontSize: 23, fontWeight: FontWeight.w700),
+              Text(
+                isAdmin ? 'Admin Dashboard' : 'Supervisor Dashboard',
+                style: const TextStyle(
+                  fontSize: 23,
+                  fontWeight: FontWeight.w700,
+                ),
               ),
-              const Text('All branches', style: TextStyle(color: muted)),
+              Text(
+                isAdmin ? 'All branches' : 'Assigned branches',
+                style: const TextStyle(color: muted),
+              ),
               rangeButton(),
-              FilledButton.icon(
-                onPressed: () => update(() => screen = 6),
-                icon: const Icon(Icons.manage_accounts_outlined, size: 18),
-                label: const Text('Manage users'),
-              ),
+              if (isAdmin)
+                FilledButton.icon(
+                  onPressed: () => update(() => screen = 6),
+                  icon: const Icon(Icons.manage_accounts_outlined, size: 18),
+                  label: const Text('Manage users'),
+                ),
               OutlinedButton.icon(
                 onPressed: () => goScreen(7),
                 icon: const Icon(Icons.content_cut, size: 18),
@@ -411,7 +423,7 @@ extension Workflow on AppState {
                   ? Colors.orange
                   : Colors.cyan,
             ),
-            if (isAdmin)
+            if (isMultiBranch)
               Text(
                 branchLabel(job['branch']),
                 style: const TextStyle(color: muted),
@@ -493,7 +505,7 @@ extension Workflow on AppState {
               isTailor ? 'My Tailor Tracking' : 'Tailor Tracking & Assignment',
               style: const TextStyle(fontSize: 22, fontWeight: FontWeight.w600),
             ),
-            if (isAdmin)
+            if (isMultiBranch)
               SizedBox(
                 width: 230,
                 child: DropdownButtonFormField<String>(
@@ -501,11 +513,19 @@ extension Workflow on AppState {
                   initialValue: trackingBranch,
                   decoration: const InputDecoration(labelText: 'Branch'),
                   items: [
-                    const DropdownMenuItem(
+                    DropdownMenuItem(
                       value: 'all',
-                      child: Text('All branches'),
+                      child: Text(
+                        isAdmin ? 'All branches' : 'Assigned branches',
+                      ),
                     ),
-                    ...branches.map(
+                    ...[
+                      ...branches,
+                      ...AppState.maps(adminSummary['branches']).where(
+                        (b) =>
+                            !branches.any((active) => active['id'] == b['id']),
+                      ),
+                    ].map(
                       (b) => DropdownMenuItem<String>(
                         value: b['id'],
                         child: Text(b['name']),
@@ -521,7 +541,7 @@ extension Workflow on AppState {
                   },
                 ),
               ),
-            if (!isAdmin) Text(branchName),
+            if (!isMultiBranch) Text(branchName),
             OutlinedButton.icon(
               onPressed: () => run(loadData),
               icon: const Icon(Icons.refresh, size: 16),

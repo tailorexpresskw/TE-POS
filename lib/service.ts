@@ -1,10 +1,11 @@
 import source from './catalogue.json' with {type:'json'};
-import {BRANCHES, METHODS, STATUSES, COUPONS, JOB_STATUSES, ROLES, canonicalRole, isManagerRole, check, integer, text, canAccess, calculate, kuwaitDay} from './domain.ts';
+import {METHODS, STATUSES, COUPONS, JOB_STATUSES, ROLES, canonicalRole, isManagerRole, check, integer, text, canAccess, calculate, kuwaitDay} from './domain.ts';
 
 import {createTracking} from './tracking.ts';
+import {createNotifications} from './notifications.ts';
 import type {Database, DocumentStore, Row} from './storage.ts';
 
-export function createService(runtime: {database: Database; bucket: DocumentStore; authenticate: (request:Request)=>Promise<{userId:string}|null>; setPassword:(id:string,password:string)=>Promise<void>}) {
+export function createService(runtime: {database: Database; bucket: DocumentStore; authenticate: (request:Request)=>Promise<{userId:string}|null>; setPassword:(id:string,password:string)=>Promise<void>;pushPublicKey?:string}) {
 const now=()=>new Date().toISOString();
 const uuid=()=>crypto.randomUUID();
 const db=()=>runtime.database;
@@ -14,23 +15,30 @@ async function first(sql:string,...args:any[]):Promise<Row|null> {return stmt(sq
 function log(branch:string, actor:Row, action:string, entity:string, detail='',whenChanged=false) {
   return stmt('INSERT INTO audit (id,branch,actor,action,entity,detail,created_at) SELECT ?,?,?,?,?,?,?'+(whenChanged?' WHERE changes()=1':''),uuid(),branch,actor.user_id,action,entity,detail,now());
 }
-const tracking=createTracking({all,first,stmt,db,log});
+const notifications=createNotifications(runtime.database,runtime.pushPublicKey);
+const branchList=()=>all('SELECT * FROM branches ORDER BY name COLLATE NOCASE');
+const tracking=createTracking({all,first,stmt,db,log,notifications,branchList,branchAccess});
 async function identity(request:Request) {
   const user=await runtime.authenticate(request); check(user,'Sign in to continue.',401);
   const member=await first('SELECT * FROM members WHERE user_id=? AND active=1',user.userId);
   check(member,'Your account has not been given staff access. Ask your administrator.',403);
   member.role=canonicalRole(member.role);check(ROLES.includes(member.role),'Your role is not configured. Ask an administrator.',403);
-  member.branches=JSON.parse(member.branches); return member;
+  const available=await branchList();
+  member.branches=JSON.parse(member.branches).filter((id:string)=>available.some(b=>b.id===id&&b.active===1)); return member;
 }
-function branchAccess(member:Row,branch:string) {check(canAccess(member as any,branch),'You do not have access to this branch.',403);}
-function manager(member:Row) {check(['admin','manager'].includes(member.role),'Manager access required.',403);}
+async function branchAccess(member:Row,branch:string,historical=false) {
+  const record=await first('SELECT * FROM branches WHERE id=?',branch);
+  check(record&&canAccess(member as any,branch,[record])&&(record.active===1||(historical&&member.role==='admin')),'You do not have access to this branch.',403);
+  return record;
+}
+function manager(member:Row) {check(isManagerRole(member.role),'Manager access required.',403);}
 function admin(member:Row) {check(member.role==='admin','Administrator access required.',403);}
 async function catalogue() {
   const overrides=await all('SELECT * FROM prices');
   return source.map(p=>({...p,...overrides.find(o=>o.id===p.id),active:overrides.find(o=>o.id===p.id)?.active??1}));
 }
 async function order(member:Row,id:string) {
-  const result=await first('SELECT o.*,m.name tailor_name,m.active tailor_active FROM orders o LEFT JOIN members m ON m.id=o.tailor_id WHERE o.id=?',id); check(result,'Sale not found.',404); branchAccess(member,result.branch); return result;
+  const result=await first('SELECT o.*,m.name tailor_name,m.active tailor_active FROM orders o LEFT JOIN members m ON m.id=o.tailor_id WHERE o.id=?',id); check(result,'Sale not found.',404); await branchAccess(member,result.branch,true); return result;
 }
 function decode(row:Row) {return {...row,lines:JSON.parse(row.lines)};}
 function dateRange(url:URL) {
@@ -39,17 +47,19 @@ function dateRange(url:URL) {
   return [new Date(from+'T00:00:00+03:00').toISOString(),new Date(to+'T23:59:59.999+03:00').toISOString()];
 }
 async function read(member:Row,path:string[],url:URL):Promise<any> {
+  if(path[0]==='notifications')return notifications.read(member,path);
   if(path[0]==='boot') {
+    const available=(await branchList()).filter(b=>b.active===1);
     const staff=await all('SELECT id,name,role,branches,active FROM members WHERE active=1');
-    const visibleStaff=staff.map((s):Row=>({...s,role:canonicalRole(s.role),branches:JSON.parse(s.branches)})).filter(s=>member.role==='admin'||(member.role==='tailor'?s.id===member.id:s.branches.some((b:string)=>canAccess(member as any,b))));
-    return {member,branches:BRANCHES.filter(b=>canAccess(member as any,b.id)),catalogue:member.role==='tailor'?[]:await catalogue(),methods:member.role==='tailor'?[]:METHODS,statuses:STATUSES,jobStatuses:JOB_STATUSES,coupons:member.role==='tailor'?[]:COUPONS,staff:visibleStaff};
+    const visibleStaff=staff.map((s):Row=>({...s,role:canonicalRole(s.role),branches:JSON.parse(s.branches)})).filter(s=>member.role==='admin'||(member.role==='tailor'?s.id===member.id:s.branches.some((b:string)=>canAccess(member as any,b,available))));
+    return {member,branches:available.filter(b=>canAccess(member as any,b.id,available)),catalogue:member.role==='tailor'?[]:await catalogue(),methods:member.role==='tailor'?[]:METHODS,statuses:STATUSES,jobStatuses:JOB_STATUSES,coupons:member.role==='tailor'?[]:COUPONS,staff:visibleStaff};
   }
   if(path[0]==='tracking')return tracking.read(member,path[1],url);
   tracking.office(member);
   if(path[0]==='dashboard'){const [start,end]=dateRange(url);return tracking.dashboard(member,url,start,end);}
   if(path[0]==='customers') {
     if(path[1]) {
-      const branch=text(url.searchParams.get('branch'),30);branchAccess(member,branch);
+      const branch=text(url.searchParams.get('branch'),100);await branchAccess(member,branch);
       const customer=await first('SELECT * FROM customers WHERE id=?',text(path[1],100));check(customer,'Customer not found.',404);
       const summary=await first("SELECT COUNT(*) bills,COALESCE(SUM(total),0) total,COALESCE(SUM(paid),0) paid,COALESCE(SUM(total-paid),0) due,MIN(created_at) first_bill,MAX(created_at) last_bill FROM orders WHERE customer_id=? AND branch=? AND kind='sale' AND status NOT IN ('Voided','Refunded')",customer.id,branch);
       const history=await all("SELECT id,bill,branch,total,paid,status,created_at FROM orders WHERE customer_id=? AND branch=? AND kind='sale' ORDER BY created_at DESC LIMIT 100",customer.id,branch);
@@ -60,7 +70,7 @@ async function read(member:Row,path:string[],url:URL):Promise<any> {
     return all("SELECT * FROM customers WHERE instr(lower(name),lower(?))>0 OR instr(phone,?)>0 OR (?<>'' AND instr(replace(replace(replace(replace(replace(phone,' ',''),'-',''),'(',''),')',''),'+',''),?)>0) ORDER BY name LIMIT 30",q,q,digits,digits);
   }
   if(path[0]==='data') {
-    const branch=text(url.searchParams.get('branch'),30); branchAccess(member,branch);
+    const branch=text(url.searchParams.get('branch'),100); await branchAccess(member,branch,true);
     const [start,end]=dateRange(url);
     const sales=await all("SELECT o.*,m.name tailor_name,m.active tailor_active FROM orders o LEFT JOIN members m ON m.id=o.tailor_id WHERE o.branch=? AND ((o.created_at BETWEEN ? AND ?) OR o.kind IN ('held','quotation')) ORDER BY o.created_at DESC LIMIT 1000",branch,start,end);
     return {orders:sales.map(decode),payments:await all('SELECT * FROM payments WHERE branch=? AND created_at BETWEEN ? AND ? ORDER BY created_at DESC LIMIT 5000',branch,start,end),expenses:await all('SELECT * FROM expenses WHERE branch=? AND created_at BETWEEN ? AND ? ORDER BY created_at DESC LIMIT 1000',branch,start,end)};
@@ -71,30 +81,41 @@ async function read(member:Row,path:string[],url:URL):Promise<any> {
   }
   if(path[0]==='admin') {
     admin(member); const [start,end]=dateRange(url);
-    return {members:(await all('SELECT id,email,username,name,role,branches,active FROM members ORDER BY role,name')).map(m=>({...m,role:canonicalRole(m.role)})),audit:await all('SELECT * FROM audit ORDER BY created_at DESC LIMIT 150'),summary:await all("SELECT branch,COUNT(*) count,SUM(total) total,SUM(paid) paid,SUM(total-paid) due FROM orders WHERE kind='sale' AND status NOT IN ('Voided','Refunded') AND created_at BETWEEN ? AND ? GROUP BY branch",start,end)};
+    return {branches:await branchList(),members:(await all('SELECT id,email,username,name,role,branches,active FROM members ORDER BY role,name')).map(m=>({...m,role:canonicalRole(m.role)})),audit:await all('SELECT * FROM audit ORDER BY created_at DESC LIMIT 150'),summary:await all("SELECT branch,COUNT(*) count,SUM(total) total,SUM(paid) paid,SUM(total-paid) due FROM orders WHERE kind='sale' AND status NOT IN ('Voided','Refunded') AND created_at BETWEEN ? AND ? GROUP BY branch",start,end)};
   }
   check(false,'Endpoint not found.',404);
 }
 async function write(member:Row,path:string[],body:Row):Promise<any> {
+  if(path[0]==='notifications')return notifications.write(member,path,body);
   if(path[0]==='tracking'&&path[1])return tracking.progress(member,path[1],body);
   tracking.office(member);
+  if(path[0]==='branches') {
+    admin(member);check(!path[1],'Endpoint not found.',404);
+    const name=text(body.name,100),code=text(body.code,8).toUpperCase();
+    check(name.length>=2,'Enter a branch name with at least 2 characters.');
+    check(/^[A-Z][A-Z0-9]{1,7}$/.test(code),'Use a branch code with 2–8 letters or numbers, starting with a letter.');
+    check(!await first('SELECT id FROM branches WHERE lower(name)=lower(?) OR upper(code)=?',name,code),'This branch name or code is already in use.',409);
+    const id=uuid();
+    await db().batch([stmt('INSERT INTO branches(id,name,code,active,created_at) VALUES (?,?,?,1,?)',id,name,code,now()),log('',member,'branch.created',id,JSON.stringify({name,code}))]);
+    return {id,name,code,active:1};
+  }
   if(path[0]==='customers') {
     const name=text(body.name,100),phone=text(body.phone,30),address=text(body.address,500);
     check(name.length>0,'Enter a customer name.'); check(!phone || /^[+\d\s()-]{5,30}$/.test(phone),'Enter a valid phone number.');
-    if(body.branch)branchAccess(member,text(body.branch,30));
+    if(body.branch)await branchAccess(member,text(body.branch,100));
     if(path[1]) {
       const id=text(path[1],100);check(await first('SELECT id FROM customers WHERE id=?',id),'Customer not found.',404);
-      await db().batch([stmt('UPDATE customers SET name=?,phone=?,address=? WHERE id=?',name,phone,address,id),log(text(body.branch,30),member,'customer.updated',id)]);
+      await db().batch([stmt('UPDATE customers SET name=?,phone=?,address=? WHERE id=?',name,phone,address,id),log(text(body.branch,100),member,'customer.updated',id)]);
       return first('SELECT * FROM customers WHERE id=?',id);
     }
     const id=uuid(); await db().batch([stmt('INSERT INTO customers (id,name,phone,address,created_at) VALUES (?,?,?,?,?)',id,name,phone,address,now()),log('',member,'customer.created',id)]);
     return {id,name,phone,address};
   }
   if(path[0]==='orders' && !path[1]) {
-    const branch=text(body.branch,30); branchAccess(member,branch);
+    const branch=text(body.branch,100); await branchAccess(member,branch);
     const id=text(body.id,100); check(/^[a-zA-Z0-9-]{16,100}$/.test(id),'Missing transaction identifier.');
     const existing=await first('SELECT * FROM orders WHERE id=?',id);
-    if(existing) {branchAccess(member,existing.branch); return decode(existing);}
+    if(existing) {await branchAccess(member,existing.branch); return decode(existing);}
     const kind=text(body.kind,20); check(['sale','held','quotation'].includes(kind),'Invalid order type.');
     const totals=calculate(body,await catalogue(),isManagerRole(member.role));
     const paymentList=body.payments??[]; check(Array.isArray(paymentList)&&paymentList.length<=8,'Invalid payments.');
@@ -103,9 +124,9 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
     const paid=payments.reduce((s,p)=>s+p.amount,0); check(paid<=totals.total,'Payment exceeds total.'); check(kind==='sale' || paid===0,'Held orders and quotations cannot receive payments.');
     const customer=body.customerId ? await first('SELECT * FROM customers WHERE id=?',text(body.customerId,100)) : null;
     check(!body.customerId || customer,'Customer not found.');
-    const staff=text(body.staff,100); if(staff) {const s=await first('SELECT * FROM members WHERE id=? AND active=1',staff); check(s && canAccess({...s,branches:JSON.parse(s.branches)} as any,branch),'Employee is not assigned to this branch.');}
+    const staff=text(body.staff,100); if(staff) {const s=await first('SELECT * FROM members WHERE id=? AND active=1',staff); check(s && canAccess({...s,branches:JSON.parse(s.branches)} as any,branch,[{id:branch}]),'Employee is not assigned to this branch.');}
     const tailorId=text(body.tailorId,100);await tracking.validateTailor(branch,tailorId);
-    const timestamp=now(),b=BRANCHES.find(b=>b.id===branch)!;
+    const timestamp=now(),b=(await first('SELECT code FROM branches WHERE id=?',branch))!;
     const bill=`${b.code}-${kuwaitDay().replaceAll('-','')}-${id.slice(-8).toUpperCase()}`;
     const sourceId=text(body.sourceId,100); let sourceOrder:Row|null=null;
     if(sourceId) {sourceOrder=await order(member,sourceId); check(sourceOrder.branch===branch&&['held','quotation'].includes(sourceOrder.kind),'This saved order has already been converted.',409);}
@@ -116,10 +137,11 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
     // A unique source marker makes conversion safe even when two tills resume the same draft.
     const externalId=sourceId?`converted:${sourceId}`:null;
     operations.push(stmt('INSERT INTO orders (id,branch,bill,kind,customer_id,customer_name,phone,address,lines,subtotal,discount,extra,total,paid,notes,cashier,cashier_id,staff,aggregator,status,created_at,updated_at,due_date,version,external_id,coupon,tailor_id,job_status,assigned_at,job_updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',id,branch,bill,kind,customer?.id??null,customer?.name??'Walk-in customer',customer?.phone??'',customer?.address??'',JSON.stringify(totals.lines),totals.subtotal,totals.discount,totals.extra,totals.total,paid,text(body.notes,4000),member.name,member.user_id,staff,text(body.aggregator,100),kind==='held'?'Held':kind==='quotation'?'Quotation':'Ongoing',timestamp,timestamp,text(body.dueDate,30),0,externalId,text(body.coupon,50),tailorId||null,'Pending',tailorId?timestamp:'',tailorId?timestamp:''));
-    if(tailorId&&kind==='sale')operations.push(tracking.event(member,{id,branch},'assigned',JSON.stringify({from:'',to:tailorId,note:'Assigned at invoicing'})));
+    if(tailorId&&kind==='sale')operations.push(tracking.event(member,{id,branch},'assigned',JSON.stringify({from:'',to:tailorId,note:'Assigned at invoicing'}),false,`assigned:${id}:0`));
     for(const p of payments) operations.push(stmt('INSERT INTO payments (id,order_id,branch,amount,method,reference,actor,created_at) VALUES (?,?,?,?,?,?,?,?)',uuid(),id,branch,p.amount,p.method,p.reference,member.user_id,timestamp));
     for(const doc of docs) operations.push(stmt('UPDATE attachments SET order_id=? WHERE id=?',id,doc));
     operations.push(log(branch,member,`${kind}.created`,id,sourceId?`Converted ${sourceId}`:''));
+    if(tailorId&&kind==='sale')operations.push(notifications.assigned(id,0,member.id));
     await db().batch(operations); return decode((await first('SELECT * FROM orders WHERE id=?',id))!);
   }
   if(path[0]==='orders' && path[1]) {
@@ -155,7 +177,7 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
       check(result[0].results.length,'Sale changed. Refresh and try again.',409);
     } else if(action==='staff') {
       const staff=text(body.staff,100); const person=await first('SELECT * FROM members WHERE id=? AND active=1',staff);
-      check(person&&canAccess({...person,branches:JSON.parse(person.branches)} as any,sale.branch),'Employee is not assigned to this branch.');
+      check(person&&canAccess({...person,branches:JSON.parse(person.branches)} as any,sale.branch,[{id:sale.branch}]),'Employee is not assigned to this branch.');
       const result=await db().batch([stmt('UPDATE orders SET staff=?,version=version+1,updated_at=? WHERE id=? AND version=? RETURNING id',staff,now(),sale.id,version),log(sale.branch,member,'sale.staff',sale.id,staff,true)]);
       check(result[0].results.length,'Sale changed. Refresh and try again.',409);
     } else if(action==='void' || action==='refund') {
@@ -176,10 +198,10 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
     return decode((await first('SELECT * FROM orders WHERE id=?',sale.id))!);
   }
   if(path[0]==='expenses') {
-    const branch=text(body.branch,30); branchAccess(member,branch);
+    const branch=text(body.branch,100); await branchAccess(member,branch);
     const amount=integer(body.amount,'Expense amount',1),description=text(body.description,1000),category=text(body.category,100),method=text(body.method,40); check(description&&category,'Enter a category and description.'); check(METHODS.includes(method),'Unknown payment method.');
     const id=text(body.id,100); check(/^[a-zA-Z0-9-]{16,100}$/.test(id),'Missing expense identifier.');
-    const duplicate=await first('SELECT * FROM expenses WHERE id=?',id); if(duplicate) {branchAccess(member,duplicate.branch);return duplicate;}
+    const duplicate=await first('SELECT * FROM expenses WHERE id=?',id); if(duplicate) {await branchAccess(member,duplicate.branch);return duplicate;}
     await db().batch([stmt('INSERT INTO expenses (id,branch,category,description,amount,method,actor,created_at) VALUES (?,?,?,?,?,?,?,?)',id,branch,category,description,amount,method,member.user_id,now()),log(branch,member,'expense.created',id)]); return {id};
   }
   if(path[0]==='members') {
@@ -191,7 +213,8 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
     check(name&&(username||(email&&!email.endsWith('@users.invalid')))&&(!email||/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)),'Enter a name and username.');
     check(!username||/^[a-z0-9][a-z0-9._-]{2,49}$/.test(username),'Use a username with 3–50 letters, numbers, dots, hyphens or underscores.');
     check(ROLES.includes(role),'Invalid role.');
-    check(Array.isArray(branches)&&branches.every(b=>BRANCHES.some(x=>x.id===b)),'Invalid branch assignments.'); check(role==='admin'||branches.length>0,'Assign at least one branch.');
+    const available=await branchList();
+    check(Array.isArray(branches)&&new Set(branches).size===branches.length&&branches.every(b=>available.some(x=>x.id===b&&x.active===1)),'Invalid branch assignments.'); check(role==='admin'||branches.length>0,'Assign at least one branch.');
     const password=body.password??'';check(typeof password==='string'&&password.length<=256,'Invalid password.'); check(body.id || password.length>=12,'Set an initial password with at least 12 characters.'); check(!password || password.length>=12,'Use a password with at least 12 characters.');
     const id=body.id?text(body.id,100):uuid(); check(id!=='owner','The initial owner cannot be changed.'); check(id!==member.id,'You cannot change your own access.');
     if(username)check(!await first('SELECT id FROM members WHERE username=? AND id<>?',username,id),'This username is already in use.',409);
@@ -228,7 +251,7 @@ async function document(request:Request,id:string) {
   try {
     const member=await identity(request);
     if(request.method==='GET') {
-      const doc=await first('SELECT * FROM attachments WHERE id=?',id); check(doc,'Document not found.',404); branchAccess(member,doc.branch);
+      const doc=await first('SELECT * FROM attachments WHERE id=?',id); check(doc,'Document not found.',404); await branchAccess(member,doc.branch,true);
       if(member.role==='tailor'){check(doc.order_id,'This document is not assigned to you.',403);await tracking.job(member,doc.order_id);}
       const file=await runtime.bucket.get(doc.object_key); check(file,'File not found.',404);
       return new Response(file.body,{headers:{'Content-Type':doc.type,'Content-Disposition':`attachment; filename*=UTF-8''${encodeURIComponent(doc.name)}`,'X-Content-Type-Options':'nosniff','Cache-Control':'private, no-store'}});
@@ -236,7 +259,7 @@ async function document(request:Request,id:string) {
     check(request.method==='POST','Method not allowed.',405);
     tracking.office(member);
     const origin=request.headers.get('origin'); check(!origin||origin===new URL(request.url).origin,'Cross-origin write rejected.',403);
-    const branch=new URL(request.url).searchParams.get('branch')??''; branchAccess(member,branch);
+    const branch=new URL(request.url).searchParams.get('branch')??''; await branchAccess(member,branch);
     const type=request.headers.get('content-type')??''; check(['image/jpeg','image/png','image/webp','application/pdf'].includes(type),'Upload a PDF, JPG, PNG or WebP.');
     check(Number(request.headers.get('content-length')??0)<=5*1024*1024,'Maximum file size is 5 MB.',413);
     const bytes=await request.arrayBuffer(); check(bytes.byteLength>0&&bytes.byteLength<=5*1024*1024,'Maximum file size is 5 MB.',413);

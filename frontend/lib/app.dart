@@ -13,6 +13,7 @@ part 'records.dart';
 part 'management.dart';
 part 'login.dart';
 part 'workflow.dart';
+part 'notifications.dart';
 
 const mint = Color(0xffabdabb),
     green = Color(0xff22bf74),
@@ -112,6 +113,10 @@ class AppState extends State<PosApp> {
   int jobOffset = 0, jobMatched = 0;
   List<Json> jobs = [];
   Json jobSummary = {}, adminSummary = {};
+  List<Json> notificationItems = [];
+  int unreadNotifications = 0;
+  bool notificationDialogOpen = false;
+  Timer? notificationTimer;
   String trackingBranch = 'all',
       jobFilter = 'All',
       jobSearch = '',
@@ -139,8 +144,11 @@ class AppState extends State<PosApp> {
   Timer? timer;
   Json get member => boot?['member'] ?? {};
   bool get isManager =>
-      member['role'] == 'admin' || member['role'] == 'manager';
+      member['role'] == 'admin' ||
+      member['role'] == 'manager' ||
+      member['role'] == 'supervisor';
   bool get isAdmin => member['role'] == 'admin';
+  bool get isMultiBranch => isAdmin || member['role'] == 'supervisor';
   bool get isTailor => member['role'] == 'tailor';
   List<Json> get catalogue => maps(boot?['catalogue']);
   List<Json> get branches => maps(boot?['branches']);
@@ -204,6 +212,14 @@ class AppState extends State<PosApp> {
   void initState() {
     super.initState();
     checkSession();
+    var notificationTicks = 0;
+    notificationTimer = Timer.periodic(const Duration(seconds: 2), (_) {
+      if (!authenticated || boot == null || branch == null) return;
+      if (!notificationDialogOpen && browser.consumeNotificationOpen()) {
+        openNotifications();
+      }
+      if (++notificationTicks % 8 == 0 && !busy) refreshNotifications();
+    });
     timer = Timer.periodic(const Duration(seconds: 60), (_) {
       if (authenticated && branch != null && !busy) {
         loadData().catchError((Object e) {
@@ -219,6 +235,7 @@ class AppState extends State<PosApp> {
   @override
   void dispose() {
     timer?.cancel();
+    notificationTimer?.cancel();
     super.dispose();
   }
 
@@ -239,8 +256,26 @@ class AppState extends State<PosApp> {
         orders = [];
         payments = [];
         expenses = [];
+        jobs = [];
+        jobSummary = {};
+        adminSummary = {};
+        trackingBranch = 'all';
       }
-      update(() => boot = data);
+      update(() {
+        if (member['id'] != data['member']['id']) {
+          notificationItems = [];
+          unreadNotifications = 0;
+        }
+        boot = data;
+        if (!isAdmin &&
+            trackingBranch != 'all' &&
+            !branches.any((b) => b['id'] == trackingBranch)) {
+          trackingBranch = 'all';
+          jobOffset = 0;
+        }
+      });
+      unawaited(refreshNotifications());
+      unawaited(bindDeviceNotifications());
       update(() => loading = false);
       if (isTailor && branches.length == 1 && branch == null) {
         branch = branches.first;
@@ -261,7 +296,7 @@ class AppState extends State<PosApp> {
   Future<void> loadData() async {
     if (branch == null) return;
     final target = branch!['id'];
-    final trackingTarget = isAdmin
+    final trackingTarget = isMultiBranch
         ? (screen == 7 ? trackingBranch : 'all')
         : target;
     final query = screen == 7
@@ -283,11 +318,13 @@ class AppState extends State<PosApp> {
     final responses = await Future.wait([
       Api.get('data?branch=$target&from=$from&to=$to'),
       Api.get('tracking?branch=$trackingTarget$query'),
-      Api.get('dashboard?branch=${isAdmin ? 'all' : target}&from=$from&to=$to'),
+      Api.get(
+        'dashboard?branch=${isMultiBranch ? 'all' : target}&from=$from&to=$to',
+      ),
     ]);
     if (branch?['id'] != target ||
         trackingTarget !=
-            (isAdmin
+            (isMultiBranch
                 ? (screen == 7 ? trackingBranch : 'all')
                 : branch?['id'])) {
       return;
@@ -791,10 +828,22 @@ class AppState extends State<PosApp> {
             padding: const EdgeInsets.symmetric(horizontal: 12),
             child: Text(today(), style: const TextStyle(color: muted)),
           ),
+        if (MediaQuery.sizeOf(context).width >= 450)
+          IconButton(
+            tooltip: arabic ? 'English labels' : 'Arabic service labels',
+            onPressed: () => update(() => arabic = !arabic),
+            icon: const Icon(Icons.translate, size: 20),
+          ),
         IconButton(
-          tooltip: arabic ? 'English labels' : 'Arabic service labels',
-          onPressed: () => update(() => arabic = !arabic),
-          icon: const Icon(Icons.translate, size: 20),
+          tooltip: 'Notifications',
+          onPressed: openNotifications,
+          icon: Badge(
+            isLabelVisible: unreadNotifications > 0,
+            label: Text(
+              unreadNotifications > 99 ? '99+' : '$unreadNotifications',
+            ),
+            child: const Icon(Icons.notifications_outlined, size: 20),
+          ),
         ),
         PopupMenuButton<String>(
           tooltip: 'Account',
@@ -805,6 +854,9 @@ class AppState extends State<PosApp> {
             if (v == 'refresh') run(loadData);
             if (v == 'admin') update(() => screen = 6);
             if (v == 'password') changePassword();
+            if (v == 'install') browser.installApp().then(notice);
+            if (v == 'notifications') openNotifications();
+            if (v == 'language') update(() => arabic = !arabic);
           },
           itemBuilder: (_) => [
             PopupMenuItem(
@@ -812,6 +864,21 @@ class AppState extends State<PosApp> {
               child: Text(member['name'] ?? 'Account'),
             ),
             const PopupMenuItem(value: 'refresh', child: Text('Refresh data')),
+            if (MediaQuery.sizeOf(context).width < 450)
+              PopupMenuItem(
+                value: 'language',
+                child: Text(
+                  arabic ? 'English labels' : 'Arabic service labels',
+                ),
+              ),
+            const PopupMenuItem(
+              value: 'install',
+              child: Text('Install POS app'),
+            ),
+            const PopupMenuItem(
+              value: 'notifications',
+              child: Text('Notifications'),
+            ),
             if (isAdmin)
               const PopupMenuItem(
                 value: 'admin',

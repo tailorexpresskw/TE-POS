@@ -11,8 +11,8 @@
     "start": "node --env-file-if-exists=.env --experimental-strip-types server/index.mjs",
     "setup-admin": "node --env-file-if-exists=.env --experimental-strip-types server/setup-admin.mjs",
     "build": "node scripts/build-flutter.mjs",
-    "test": "node --experimental-strip-types --test server/server.test.mjs server/workflow.test.mjs server/migration.test.mjs lib/domain.test.mjs",
-    "test:api": "node --experimental-strip-types --test server/server.test.mjs server/workflow.test.mjs server/migration.test.mjs",
+    "test": "node --experimental-strip-types --test server/server.test.mjs server/workflow.test.mjs server/migration.test.mjs lib/domain.test.mjs server/notifications.test.mjs server/pwa.test.mjs server/branches.test.mjs",
+    "test:api": "node --experimental-strip-types --test server/server.test.mjs server/workflow.test.mjs server/migration.test.mjs server/notifications.test.mjs server/pwa.test.mjs server/branches.test.mjs",
     "test:finance": "node --experimental-strip-types --test lib/domain.test.mjs",
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
@@ -24,5 +24,8 @@
     "drizzle-kit": "0.31.10",
     "drizzle-orm": "0.45.2",
     "typescript": "5.9.3"
+  },
+  "dependencies": {
+    "web-push": "^3.6.7"
   }
 }

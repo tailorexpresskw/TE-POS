@@ -5,21 +5,24 @@ This is a regular, self-hosted web app. Staff sign in using their Tailor Express
 ## Check it locally
 
 1. Install Node.js 22.13 or newer.
-2. First time only: run `Setup-Admin.cmd` to provision the initial administrator. This local command asks for your name, username and a hidden password. It preserves an existing administrator.
+2. If using a source checkout, run `npm ci --omit=dev` first; the standalone ZIP includes runtime dependencies. First time only: run `Setup-Admin.cmd` to provision the initial administrator. This local command asks for your name, username and a hidden password. It preserves an existing administrator.
 3. Double-click `Start-POS.cmd`, or run `npm start` from the app folder.
 4. Visit **http://localhost:3000** and sign in. There is no public registration or browser-based initial-account creation.
-5. In **Administration**, the Admin creates Manager, Reception and Tailor accounts, sets their passwords, and assigns their allowed branches.
+5. In **Administration**, use **Add branch** to create a branch with a unique name and invoice code. Admin creates Supervisor, Manager, Reception and Tailor accounts, sets their passwords, and checks all their allowed branches.
 
 Only Admin can create or change staff accounts. The initial local setup command (or private administrator environment variables on the server) exists solely to provision the first Admin. There is no preset password.
 
 ### Role dashboards and branch access
 
 - **Admin:** overview of all branches, financial totals, unassigned work, tailor tracking, catalogue management and user administration.
+- **Supervisor:** combined dashboard and tailor tracking across assigned branches, plus invoices, payments, reports, financial overrides, assignments and progress corrections for those branches. Only Admin can create branches, manage accounts or edit catalogue prices. Adding or removing a Supervisor's branch access takes effect on the next server request.
 - **Branch Manager:** branch dashboard, invoices, payments, reports, tailor assignments and progress corrections for assigned branches. Managers can apply financial overrides; only Admin manages user accounts and catalogue prices.
 - **Reception:** the familiar POS and branch dashboard, customer invoices, payments and receipts. Staff can view and assign invoices only within their assigned branch access.
 - **Tailor:** their own workload dashboard and tracking page. They can read the garment instructions and authorized documents for their assigned jobs, add progress notes, and move work through Pending, In Progress, On Hold and Completed. They cannot view invoice prices, payments, other tailors' jobs, the POS, or user administration.
 
 Existing Cashier accounts are treated as Reception without deleting or replacing the accounts. Existing Branch Manager accounts retain their branch and financial permissions. Existing email logins continue to work; Admin can add usernames to these accounts without replacing them. New accounts use usernames (3?50 letters, numbers, dots, hyphens or underscores) and passwords.
+
+Branches are stored in the database, so creating one requires no code change or rebuild. Aventura is retired from the location picker and new staff assignments; its old invoices, payments and documents remain intact and accessible to Admin. If staff previously had only Aventura access, Admin must assign another active branch before they can continue working.
 
 ### Customers and service instructions
 
@@ -37,7 +40,7 @@ Reception can select a branch tailor during payment, or choose Assign later. The
 
 Tailor progress is tracked separately from the existing invoice/delivery status. Reception continues to handle Prepared, Packed, Delivered and Closed in the usual sales workflow. Progress notes, assignment changes and work-status changes are retained in the job history and audit trail.
 
-Keep the server terminal open while using the app. The compiled Flutter app is included under `public/pos`, so Flutter and npm dependency installation are not needed just to run this package.
+Keep the server terminal open while using the app. The compiled Flutter app is included under `public/pos`, and the standalone ZIP includes Node runtime dependencies, so Flutter and npm installation are not needed just to run that ZIP. A Git source checkout needs `npm ci --omit=dev`.
 
 ## Your data
 
@@ -81,3 +84,7 @@ ADMIN_PASSWORD=your-private-password-with-at-least-12-characters
 Run one application instance per SQLite data directory. Multiple branches and devices connect to that same server and share the database. Test printers and configure employee access before live branch use. K-NET and card entries currently record payments received externally; no payment terminal, booking system or inventory system is connected. Voucher/package balances, offline sales synchronization and shift reconciliation remain outside this first version.
 
 The original 446 catalogue items came from the supplied Excel price list. Desktop screens follow the old POS layout. Phone and tablet layouts adapt to the available space. Prices are stored as integer fils and reports use Kuwait business dates.
+
+## Install as an app, notifications and future mobile builds
+
+See [App installation, notifications and Android/iOS roadmap](APP-AND-NOTIFICATIONS.md). The web app includes an install option in Account and a notification bell. Production device alerts require HTTPS, a running server and permission on each device.

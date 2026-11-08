@@ -30,6 +30,7 @@ extension Account on AppState {
       return;
     }
     await run(() async {
+      await disableDeviceNotifications();
       await Api.post('auth/logout', {});
       update(() {
         authenticated = false;
@@ -39,6 +40,14 @@ extension Account on AppState {
         orders = [];
         payments = [];
         expenses = [];
+        jobs = [];
+        jobSummary = {};
+        adminSummary = {};
+        trackingBranch = 'all';
+        jobOffset = 0;
+        jobMatched = 0;
+        notificationItems = [];
+        unreadNotifications = 0;
         screen = 0;
       });
     });

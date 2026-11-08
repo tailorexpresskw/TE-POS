@@ -9,7 +9,7 @@ extension Records on AppState {
   int sum(List<Json> rows, String key) =>
       rows.fold<int>(0, (s, r) => s + ((r[key] as num?)?.toInt() ?? 0));
   Widget dashboard() {
-    if (isAdmin) return adminDashboard();
+    if (isMultiBranch) return adminDashboard();
     if (isTailor) return tailorDashboard();
     final cards = [
       (

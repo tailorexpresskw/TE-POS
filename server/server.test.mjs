@@ -25,10 +25,10 @@ test('standalone accounts, sessions, branch permissions, payments and persistenc
     assert.match(hash,/^scrypt:/);assert.ok(!hash.includes(password));
     await call('auth/setup',{body:{name:'Other',email:'other@pos.test',password},status:403});
     await call('auth/login',{body:{email:'owner@pos.test',password:'wrong'},status:401});
-    const boot=await call('boot',{cookie:ownerCookie});assert.equal(boot.data.catalogue.length,446);assert.equal(boot.data.branches.length,10);
+    const boot=await call('boot',{cookie:ownerCookie});assert.equal(boot.data.catalogue.length,446);assert.equal(boot.data.branches.length,9);
     const invited=await call('members',{cookie:ownerCookie,body:{name:'Cashier',email:'cashier@pos.test',role:'cashier',branches:['zahra'],password}});
     const login=await call('auth/login',{body:{email:'cashier@pos.test',password}});cashierCookie=login.response.headers.get('set-cookie').split(';')[0];
-    await call('admin',{cookie:cashierCookie,status:403});await call('data?branch=aventura',{cookie:cashierCookie,status:403});
+    await call('admin',{cookie:cashierCookie,status:403});await call('data?branch=avenues',{cookie:cashierCookie,status:403});
     const id=randomUUID(),draft={id,branch:'zahra',kind:'sale',lines:[{id:'1001',qty:1,price:2000}],payments:[]};
     await call('orders',{cookie:cashierCookie,body:{...draft,id:randomUUID(),discount:500},status:403});
     await call('orders',{cookie:cashierCookie,body:draft});await call('orders',{cookie:cashierCookie,body:draft});

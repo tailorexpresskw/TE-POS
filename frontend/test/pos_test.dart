@@ -38,7 +38,7 @@ void main() {
             },
             'branches': [
               {'id': 'zahra', 'name': 'Zahra Complex'},
-              {'id': 'aventura', 'name': 'Aventura'},
+              {'id': 'avenues', 'name': 'Avenues'},
             ],
             'catalogue': [
               {

@@ -1,4 +1,9 @@
 import { sqliteTable, text, integer } from 'drizzle-orm/sqlite-core';
+export const branches = sqliteTable('branches', {
+  id: text('id').primaryKey(), name: text('name').notNull().unique(),
+  code: text('code').notNull().unique(), active: integer('active').notNull().default(1),
+  createdAt: text('created_at').notNull(),
+});
 export const members = sqliteTable('members', {
   id: text('id').primaryKey(), userId: text('user_id').unique(), email: text('email').notNull().unique(),
   username: text('username').unique(),
@@ -36,4 +41,20 @@ export const jobEvents=sqliteTable('job_events',{
 });
 export const attachments = sqliteTable('attachments', {
   id: text('id').primaryKey(), branch: text('branch').notNull(), orderId: text('order_id'), name: text('name').notNull(), type: text('type').notNull(), objectKey: text('object_key').notNull(), createdAt: text('created_at').notNull(),
+});
+export const notifications = sqliteTable('notifications', {
+  id:text('id').primaryKey(), memberId:text('member_id').notNull().references(()=>members.id),
+  orderId:text('order_id').notNull().references(()=>orders.id), branch:text('branch').notNull(),
+  type:text('type').notNull(),title:text('title').notNull(),message:text('message').notNull(),
+  createdAt:text('created_at').notNull(),readAt:text('read_at').notNull().default(''),
+});
+export const pushSubscriptions = sqliteTable('push_subscriptions', {
+  id:text('id').primaryKey(),memberId:text('member_id').notNull().references(()=>members.id),
+  subscription:text('subscription').notNull(),createdAt:text('created_at').notNull(),
+});
+export const pushDeliveries = sqliteTable('push_deliveries', {
+  id:text('id').primaryKey(),notificationId:text('notification_id').notNull().references(()=>notifications.id),
+  subscriptionId:text('subscription_id').notNull().references(()=>pushSubscriptions.id),
+  attempts:integer('attempts').notNull().default(0),nextAttempt:text('next_attempt').notNull().default(''),
+  sentAt:text('sent_at').notNull().default(''),
 });

@@ -7,7 +7,13 @@ import 'package:tailor_express_pos/api.dart';
 import 'package:tailor_express_pos/app.dart';
 
 void main() {
-  for (final role in ['admin', 'manager', 'reception', 'tailor']) {
+  for (final role in [
+    'admin',
+    'manager',
+    'supervisor',
+    'reception',
+    'tailor',
+  ]) {
     for (final width in [1440.0, 390.0]) {
       testWidgets('$role dashboard and tracking at ${width.toInt()}px', (
         tester,
@@ -19,6 +25,7 @@ void main() {
         final calls = <String>[];
         final queries = <Uri>[];
         Json? savedMember;
+        Json? savedBranch;
         var status = 'Pending', version = 0;
         Json job() => {
           'id': 'job-1',
@@ -65,6 +72,9 @@ void main() {
                 },
                 'branches': [
                   {'id': 'zahra', 'name': 'Zahra Complex'},
+                  if (role == 'admin' || role == 'supervisor')
+                    {'id': 'avenues', 'name': 'Avenues'},
+                  ?savedBranch,
                 ],
                 'catalogue': [],
                 'methods': ['Cash'],
@@ -127,6 +137,16 @@ void main() {
               savedMember = Json.from(jsonDecode(request.body));
               data = {'id': 'new-manager'};
               break;
+            case '/api/branches':
+              savedBranch = {
+                'id': 'new-branch',
+                ...Json.from(jsonDecode(request.body)),
+              };
+              data = savedBranch;
+              break;
+            case '/api/admin':
+              data = {'members': [], 'audit': [], 'summary': []};
+              break;
             case '/api/data':
               data = {'orders': [], 'payments': [], 'expenses': []};
               break;
@@ -172,6 +192,8 @@ void main() {
             ? 'Reception Dashboard'
             : role == 'manager'
             ? 'Branch Manager Dashboard'
+            : role == 'supervisor'
+            ? 'Supervisor Dashboard'
             : 'Tailor Dashboard';
         expect(find.text(title), findsOneWidget);
         expect(tester.takeException(), isNull);
@@ -188,6 +210,25 @@ void main() {
                 .last
                 .queryParameters['branch'],
             'zahra',
+          );
+        }
+        if (role == 'supervisor') {
+          expect(find.text('Assigned branches'), findsOneWidget);
+          expect(find.text('Manage users'), findsNothing);
+          expect(find.text('Administration'), findsNothing);
+          expect(
+            queries
+                .where((q) => q.path == '/api/dashboard')
+                .last
+                .queryParameters['branch'],
+            'all',
+          );
+          expect(
+            queries
+                .where((q) => q.path == '/api/tracking')
+                .last
+                .queryParameters['branch'],
+            'all',
           );
         }
         if (role == 'tailor') {
@@ -243,8 +284,8 @@ void main() {
             of: dialog,
             matching: find.byType(TextField),
           );
-          await tester.enterText(fields.at(0), 'New Manager');
-          await tester.enterText(fields.at(1), 'zahra.manager');
+          await tester.enterText(fields.at(0), 'New Supervisor');
+          await tester.enterText(fields.at(1), 'multi.supervisor');
           await tester.enterText(fields.at(2), 'a-long-test-password');
           await tester.ensureVisible(find.text('Role'));
           await tester.tap(
@@ -254,20 +295,40 @@ void main() {
             ),
           );
           await tester.pumpAndSettle();
-          await tester.tap(find.text('Branch Manager').last);
+          await tester.tap(find.text('Supervisor').last);
           await tester.pumpAndSettle();
           await tester.tap(
             find
                 .descendant(of: dialog, matching: find.byType(CheckboxListTile))
                 .first,
           );
+          final lastBranch = find
+              .descendant(of: dialog, matching: find.byType(CheckboxListTile))
+              .last;
+          await tester.ensureVisible(lastBranch);
+          await tester.tap(lastBranch);
           await tester.ensureVisible(find.text('Save staff access'));
           await tester.tap(find.text('Save staff access'));
           await tester.pumpAndSettle();
           await save;
-          expect(savedMember?['username'], 'zahra.manager');
-          expect(savedMember?['role'], 'manager');
-          expect(savedMember?['branches'], ['zahra']);
+          expect(savedMember?['username'], 'multi.supervisor');
+          expect(savedMember?['role'], 'supervisor');
+          expect(savedMember?['branches'], ['zahra', 'avenues']);
+          appState.update(() => appState.screen = 6);
+          await tester.pumpAndSettle();
+          await tester.ensureVisible(find.text('Add branch'));
+          await tester.tap(find.text('Add branch'));
+          await tester.pumpAndSettle();
+          final branchFields = find.descendant(
+            of: find.byType(Dialog),
+            matching: find.byType(TextFormField),
+          );
+          await tester.enterText(branchFields.at(0), 'New Branch');
+          await tester.enterText(branchFields.at(1), 'NB');
+          await tester.tap(find.text('Save'));
+          await tester.pumpAndSettle();
+          expect(savedBranch?['name'], 'New Branch');
+          expect(appState.branches.any((b) => b['id'] == 'new-branch'), isTrue);
           expect(tester.takeException(), isNull);
         }
         await tester.pumpWidget(const SizedBox.shrink());

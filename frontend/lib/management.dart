@@ -47,6 +47,14 @@ extension Management on AppState {
                           icon: const Icon(Icons.person_add_outlined, size: 18),
                           label: const Text('Add staff access'),
                         ),
+                        FilledButton.icon(
+                          onPressed: createBranch,
+                          icon: const Icon(
+                            Icons.add_business_outlined,
+                            size: 18,
+                          ),
+                          label: const Text('Add branch'),
+                        ),
                         OutlinedButton.icon(
                           onPressed: catalogueManager,
                           icon: const Icon(Icons.sell_outlined, size: 18),
@@ -57,7 +65,7 @@ extension Management on AppState {
                     ),
                     const SizedBox(height: 15),
                     const Text(
-                      'Create staff accounts with a username, password and allowed branches. Only Admin can create or change accounts.',
+                      'Only Admin can create branches and staff accounts. Assign a Supervisor to one or more branches to oversee their invoices and tailor work.',
                       style: TextStyle(color: muted, fontSize: 11),
                     ),
                   ],
@@ -147,9 +155,30 @@ extension Management on AppState {
     );
   }
 
+  Future<void> createBranch() async {
+    final result = await form('Add branch', [
+      const Field('name', 'Branch name', required: true),
+      const Field(
+        'code',
+        'Invoice code (2–8 letters or numbers)',
+        required: true,
+      ),
+    ]);
+    if (result == null) return;
+    await run(() async {
+      await Api.post('branches', result);
+      final data = Json.from(await Api.get('boot'));
+      update(() => boot = data);
+      await loadData();
+      notice('Branch created. You can now assign staff to it.');
+    });
+  }
+
   Future<void> inviteStaff({Json? existing}) async {
     final selected = existing != null
-        ? List<String>.from(jsonDecode(existing['branches']))
+        ? List<String>.from(
+            jsonDecode(existing['branches']),
+          ).where((id) => branches.any((b) => b['id'] == id)).toList()
         : <String>[];
     final name = TextEditingController(text: existing?['name'] ?? '');
     final username = TextEditingController(text: existing?['username'] ?? '');
@@ -207,17 +236,29 @@ extension Management on AppState {
                           isExpanded: true,
                           initialValue: role,
                           decoration: const InputDecoration(labelText: 'Role'),
-                          items: ['reception', 'tailor', 'manager', 'admin']
-                              .map(
-                                (r) => DropdownMenuItem(
-                                  value: r,
-                                  child: Text(roleLabel(r)),
-                                ),
-                              )
-                              .toList(),
+                          items:
+                              [
+                                    'reception',
+                                    'tailor',
+                                    'manager',
+                                    'supervisor',
+                                    'admin',
+                                  ]
+                                  .map(
+                                    (r) => DropdownMenuItem(
+                                      value: r,
+                                      child: Text(roleLabel(r)),
+                                    ),
+                                  )
+                                  .toList(),
                           onChanged: (v) => set(() => role = v!),
                         ),
                         const SizedBox(height: 12),
+                        if (role == 'supervisor')
+                          const Text(
+                            'Select all branches this Supervisor can oversee.',
+                            style: TextStyle(color: muted),
+                          ),
                         if (role != 'admin')
                           ...branches.map(
                             (b) => CheckboxListTile(

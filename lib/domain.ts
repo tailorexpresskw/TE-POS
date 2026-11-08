@@ -1,5 +1,5 @@
 export const BRANCHES = [
-  {id:'aventura',name:'Aventura',code:'AV'}, {id:'avenues',name:'Avenues',code:'AN'},
+  {id:'avenues',name:'Avenues',code:'AN'},
   {id:'dasma',name:'Dasma',code:'DA'}, {id:'hessa',name:'Hessa Al Mubarak',code:'HM'},
   {id:'home',name:'Home Service',code:'HS'}, {id:'mishref',name:'Mishref',code:'MI'},
   {id:'promenade',name:'Promenade Mall',code:'PM'}, {id:'qurtoba',name:'Qurtoba',code:'QU'},
@@ -8,9 +8,9 @@ export const BRANCHES = [
 export const METHODS = ['Cash', 'K-NET', 'Visa / Mastercard', 'Bank transfer'];
 export const STATUSES = ['Ongoing','Prepared','Packed','Out for Delivery','Delivered','Closed'];
 export const JOB_STATUSES = ['Pending','In Progress','On Hold','Completed'];
-export const ROLES = ['admin','manager','reception','tailor'];
+export const ROLES = ['admin','manager','supervisor','reception','tailor'];
 export function canonicalRole(role:string) {return role==='cashier'?'reception':role;}
-export function isManagerRole(role:string) {return ['admin','manager'].includes(canonicalRole(role));}
+export function isManagerRole(role:string) {return ['admin','manager','supervisor'].includes(canonicalRole(role));}
 export const COUPONS = [{id:'dar-usha',name:'Dar Usha',percent:15}, {id:'family',name:'Family and Friends',percent:20}];
 export function check(condition: unknown, message: string, status=400): asserts condition {
   if (!condition) throw Object.assign(new Error(message), {status});
@@ -22,8 +22,8 @@ export function text(value: unknown, max=1000): string {
   check(value===undefined || value===null || typeof value==='string','Invalid text.');
   const result=String(value??'').trim(); check(result.length<=max,`Text exceeds ${max} characters.`); return result;
 }
-export function canAccess(member: {role:string; branches:string[];active?:number}, branch:string) {
-  return member.active!==0 && BRANCHES.some(b=>b.id===branch) && (member.role==='admin' || member.branches.includes(branch));
+export function canAccess(member: {role:string; branches:string[];active?:number}, branch:string, branches: ReadonlyArray<Record<string,unknown>>=BRANCHES) {
+  return member.active!==0 && branches.some(b=>b.id===branch) && (member.role==='admin' || member.branches.includes(branch));
 }
 export function calculate(input: any, catalogue: any[], isManager: boolean) {
   check(Array.isArray(input.lines) && input.lines.length>0 && input.lines.length<=200,'Add at least one item (maximum 200 lines).');

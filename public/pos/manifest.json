@@ -1,7 +1,7 @@
 {
   "name": "Tailor Express POS",
-  "short_name": "Tailor Express POS",
-  "start_url": ".",
+  "short_name": "Tailor Express",
+  "start_url": "/pos/",
   "display": "standalone",
   "background_color": "#22bf74",
   "theme_color": "#22bf74",
@@ -9,10 +9,30 @@
   "prefer_related_applications": false,
   "icons": [
     {
-      "src": "icon.svg",
-      "sizes": "any",
-      "type": "image/svg+xml",
+      "src": "icons/app-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
       "purpose": "any"
+    },
+    {
+      "src": "icons/app-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "icons/app-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
     }
-  ]
+  ],
+  "id": "/pos/",
+  "scope": "/pos/",
+  "orientation": "any",
+  "categories": [
+    "business",
+    "productivity"
+  ],
+  "lang": "en"
 }
