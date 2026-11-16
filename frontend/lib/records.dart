@@ -8,13 +8,15 @@ extension Records on AppState {
   );
   int sum(List<Json> rows, String key) =>
       rows.fold<int>(0, (s, r) => s + ((r[key] as num?)?.toInt() ?? 0));
+  int netSales(List<Json> rows) =>
+      rows.fold<int>(0, (sum, row) => sum + invoiceNet(row));
   Widget dashboard() {
     if (isMultiBranch) return adminDashboard();
     if (isTailor) return tailorDashboard();
     final cards = [
       (
         'Total Sales',
-        '${money(sum(activeSales, 'total'))} KWD',
+        '${money(netSales(activeSales))} KWD',
         Icons.receipt_long_outlined,
         green,
       ),
@@ -32,7 +34,7 @@ extension Records on AppState {
       ),
       (
         'Due Amount',
-        '${money(sum(activeSales, 'total') - sum(activeSales, 'paid'))} KWD',
+        '${money(netSales(activeSales) - sum(activeSales, 'paid'))} KWD',
         Icons.more_time_outlined,
         Colors.orange,
       ),
@@ -59,6 +61,7 @@ extension Records on AppState {
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
           receptionActions(),
+          operationsOverview(),
           Wrap(
             alignment: WrapAlignment.spaceBetween,
             crossAxisAlignment: WrapCrossAlignment.center,
@@ -107,7 +110,7 @@ extension Records on AppState {
                   SizedBox(
                     width: width,
                     child: chart('Sales by Invoice Type', {
-                      'Default': sum(activeSales, 'total'),
+                      'Default': netSales(activeSales),
                     }),
                   ),
                   SizedBox(
@@ -584,21 +587,32 @@ extension Records on AppState {
                                             value: 'clone',
                                             child: Text('Clone bill'),
                                           ),
-                                          if (isManager &&
+                                          if (canOperate('refund') &&
                                               !quotations &&
                                               ![
                                                 'Voided',
                                                 'Refunded',
                                               ].contains(o['status']))
-                                            PopupMenuItem(
-                                              value: o['paid'] > 0
-                                                  ? 'refund'
-                                                  : 'void',
+                                            const PopupMenuItem(
+                                              value: 'refund',
                                               child: Text(
-                                                o['paid'] > 0
-                                                    ? 'Refund sale'
-                                                    : 'Delete sale',
-                                                style: const TextStyle(
+                                                'Refund services / invoice',
+                                                style: TextStyle(
+                                                  color: Colors.redAccent,
+                                                ),
+                                              ),
+                                            ),
+                                          if (canOperate('cancel') &&
+                                              !quotations &&
+                                              ![
+                                                'Voided',
+                                                'Refunded',
+                                              ].contains(o['status']))
+                                            const PopupMenuItem(
+                                              value: 'cancel',
+                                              child: Text(
+                                                'Cancel invoice',
+                                                style: TextStyle(
                                                   color: Colors.redAccent,
                                                 ),
                                               ),
@@ -649,6 +663,10 @@ extension Records on AppState {
     _ => Icons.format_list_bulleted,
   };
   Future<void> saleAction(Json original, String action) async {
+    if (['refund', 'cancel', 'void', 'charge'].contains(action)) {
+      await adjustmentAction(original, action);
+      return;
+    }
     if (action == 'assign') {
       await run(() async {
         await assignInvoice(original);
@@ -695,7 +713,7 @@ extension Records on AppState {
         Field(
           'amount',
           'Amount (KWD)',
-          initial: money(o['total'] - o['paid']),
+          initial: money(invoiceNet(o) - o['paid']),
           number: true,
           required: true,
         ),
@@ -763,23 +781,6 @@ extension Records on AppState {
           'method': result['method'],
         };
       }
-    } else if (action == 'void' || action == 'refund') {
-      values = await form(
-        action == 'refund' ? 'Refund sale' : 'Delete sale',
-        [
-          const Field('reason', 'Reason', required: true, multiline: true),
-          if (action == 'refund')
-            Field(
-              'method',
-              'Refund method',
-              options: methods,
-              initial: methods.first,
-            ),
-        ],
-        help: action == 'refund'
-            ? 'Confirm the refund was issued externally. The original sale and payment history will be kept.'
-            : 'The sale will be marked void and kept in the audit trail.',
-      );
     }
     if (values != null) {
       await run(() async {
@@ -801,6 +802,8 @@ extension Records on AppState {
       bool assigning = false;
       final ps = AppState.maps(detail['payments']);
       final files = AppState.maps(detail['attachments']);
+      final related = AppState.maps(detail['related']);
+      var work = AppState.maps(detail['tasks']);
       final lines = AppState.maps(o['lines']);
       final branchTitle =
           branches.where((b) => b['id'] == o['branch']).firstOrNull?['name'] ??
@@ -833,6 +836,9 @@ extension Records on AppState {
                 style: TextStyle(fontSize: 21, fontWeight: FontWeight.w800),
               ),
               Text(branchTitle),
+              Text(documentLabel(o)),
+              if ((o['parent_bill'] ?? '') != '')
+                Text('Original invoice: ${o['parent_bill']}'),
               const SizedBox(height: 15),
               Text('${o['customer_name']} · ${o['phone']}'),
               Text(
@@ -853,7 +859,7 @@ extension Records on AppState {
                       ),
                       Text('${l['qty']} × ${money(l['price'])}'),
                       const SizedBox(width: 20),
-                      Text(money(l['qty'] * l['price'])),
+                      Text(money(l['amount'] ?? l['qty'] * l['price'])),
                     ],
                   ),
                 ),
@@ -865,6 +871,12 @@ extension Records on AppState {
               ),
               const SizedBox(height: 12),
               moneyText(o['total'], size: 25),
+              if ((o['refunded_total'] ?? 0) > 0)
+                Text(
+                  'Credited: ${money(o['refunded_total'])} · Current amount: ${money(invoiceNet(o))} KWD',
+                ),
+              if (['refund', 'cancellation'].contains(o['document_type']))
+                Text('Cash returned: ${money(o['cash_returned'] ?? 0)} KWD'),
               Text('Paid: ${money(o['paid'])} · Status: ${o['status']}'),
               ...ps.map(
                 (p) => Text(
@@ -885,9 +897,27 @@ extension Records on AppState {
                 ),
               ),
               const SizedBox(height: 20),
-              if (o['kind'] == 'sale') ...[
+              if (o['kind'] == 'sale' &&
+                  (o['document_type'] ?? 'invoice') == 'invoice' &&
+                  !['Voided', 'Refunded'].contains(o['status'])) ...[
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(dialogContext);
+                    await adjustmentAction(o, 'charge');
+                  },
+                  icon: const Icon(Icons.local_shipping_outlined, size: 17),
+                  label: const Text('Add delivery / extra charge'),
+                ),
                 Text(
                   'Tailor: ${o['tailor_name'] ?? tailorLabel(o['tailor_id'], fallback: 'Unassigned')}',
+                ),
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(dialogContext);
+                    await jobDetail(o);
+                  },
+                  icon: const Icon(Icons.fact_check_outlined, size: 17),
+                  label: const Text('Service tracking / reception check'),
                 ),
                 const Text(
                   'Assign a tailor now, or leave unassigned and assign later from your dashboard.',
@@ -901,7 +931,15 @@ extension Records on AppState {
                           try {
                             final updated = await assignInvoice(o);
                             if (updated != null && dialogContext.mounted) {
-                              refresh(() => o = updated);
+                              final fresh = Json.from(
+                                await Api.get('orders/${o['id']}'),
+                              );
+                              if (dialogContext.mounted) {
+                                refresh(() {
+                                  o = Json.from(fresh['order']);
+                                  work = AppState.maps(fresh['tasks']);
+                                });
+                              }
                             }
                           } catch (e) {
                             notice(e, error: true);
@@ -913,6 +951,35 @@ extension Records on AppState {
                         },
                   icon: const Icon(Icons.content_cut, size: 17),
                   label: const Text('Assign tailor'),
+                ),
+              ],
+              if (work.isNotEmpty) ...[
+                OutlinedButton.icon(
+                  onPressed: () =>
+                      browser.printHtml(workSlipsHtml(o, work, branchTitle)),
+                  icon: const Icon(Icons.content_cut, size: 17),
+                  label: const Text('Print tailor work slips'),
+                ),
+                const SizedBox(height: 10),
+              ],
+              if (related.isNotEmpty) ...[
+                const Text(
+                  'Linked documents',
+                  style: TextStyle(fontWeight: FontWeight.w600),
+                ),
+                ...related.map(
+                  (document) => ListTile(
+                    contentPadding: EdgeInsets.zero,
+                    title: Text(document['bill']),
+                    subtitle: Text(
+                      '${document['document_type']} · ${money(document['total'])} KWD',
+                    ),
+                    trailing: const Icon(Icons.open_in_new, size: 17),
+                    onTap: () async {
+                      Navigator.pop(dialogContext);
+                      await receipt(document);
+                    },
+                  ),
                 ),
               ],
               OutlinedButton.icon(
@@ -1068,7 +1135,7 @@ extension Records on AppState {
                 spacing: 45,
                 runSpacing: 25,
                 children: [
-                  summaryValue('Net sales', money(sum(activeSales, 'total'))),
+                  summaryValue('Net sales', money(netSales(activeSales))),
                   summaryValue(
                     'Received (less refunds)',
                     money(sum(payments, 'amount')),

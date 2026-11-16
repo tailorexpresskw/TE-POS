@@ -18,7 +18,7 @@ Only Admin can create or change staff accounts. The initial local setup command 
 - **Supervisor:** combined dashboard and tailor tracking across assigned branches, plus invoices, payments, reports, financial overrides, assignments and progress corrections for those branches. Only Admin can create branches, manage accounts or edit catalogue prices. Adding or removing a Supervisor's branch access takes effect on the next server request.
 - **Branch Manager:** branch dashboard, invoices, payments, reports, tailor assignments and progress corrections for assigned branches. Managers can apply financial overrides; only Admin manages user accounts and catalogue prices.
 - **Reception:** the familiar POS and branch dashboard, customer invoices, payments and receipts. Staff can view and assign invoices only within their assigned branch access.
-- **Tailor:** their own workload dashboard and tracking page. They can read the garment instructions and authorized documents for their assigned jobs, add progress notes, and move work through Pending, In Progress, On Hold and Completed. They cannot view invoice prices, payments, other tailors' jobs, the POS, or user administration.
+- **Tailor:** their own workload dashboard and tracking page. They can read garment instructions and authorized documents for assigned services, add notes, and move work through Pending, In Progress, On Hold and Awaiting Review. Reception checks finished services before they become Completed. Tailors cannot view invoice prices, payments, other tailors' services, the POS, or user administration.
 
 Existing Cashier accounts are treated as Reception without deleting or replacing the accounts. Existing Branch Manager accounts retain their branch and financial permissions. Existing email logins continue to work; Admin can add usernames to these accounts without replacing them. New accounts use usernames (3?50 letters, numbers, dots, hyphens or underscores) and passwords.
 
@@ -31,6 +31,8 @@ Click **Walk-in customer** in the POS to search by name or phone, open a saved p
 Choosing a service adds it straight to the Item Name list. Click that added service in the cart to enter or edit its garment notes or measurements, quantity and permitted price. Selecting from the catalogue does not open the notes dialog. The same service with different notes stays on separate invoice lines, and those instructions are included in tailor tracking and the invoice PDFs.
 
 ### Printing, assignment and manual WhatsApp
+
+For service-level assignments, mandatory reception checks, backjob credit rules, linked refunds/cancellations/delivery charges, and the phone dashboard, see [Service workflows](SERVICE-WORKFLOWS.md). Admin grants refund and cancellation permissions in each staff account; other accounts do not receive these grants by default.
 
 Reception can select a branch tailor during payment, or choose Assign later. The invoice/receipt screen also offers Assign tailor before printing. Assignment and reassignment are available later from the branch dashboard, Sales List and Tracking page. Only active tailors who belong to that invoice's branch can be selected. Reassigning work that has already started requires a reason and keeps the work history.
 

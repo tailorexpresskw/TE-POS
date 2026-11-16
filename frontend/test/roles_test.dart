@@ -307,6 +307,10 @@ void main() {
               .last;
           await tester.ensureVisible(lastBranch);
           await tester.tap(lastBranch);
+          await tester.ensureVisible(find.text('Allow refunds'));
+          await tester.tap(find.text('Allow refunds'));
+          await tester.ensureVisible(find.text('Allow cancellations'));
+          await tester.tap(find.text('Allow cancellations'));
           await tester.ensureVisible(find.text('Save staff access'));
           await tester.tap(find.text('Save staff access'));
           await tester.pumpAndSettle();
@@ -314,6 +318,7 @@ void main() {
           expect(savedMember?['username'], 'multi.supervisor');
           expect(savedMember?['role'], 'supervisor');
           expect(savedMember?['branches'], ['zahra', 'avenues']);
+          expect(savedMember?['permissions'], {'refund': true, 'cancel': true});
           appState.update(() => appState.screen = 6);
           await tester.pumpAndSettle();
           await tester.ensureVisible(find.text('Add branch'));

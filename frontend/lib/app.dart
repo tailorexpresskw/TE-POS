@@ -2,6 +2,7 @@ library;
 
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math' show min;
 import 'package:flutter/material.dart';
 import 'api.dart';
 import 'whatsapp.dart';
@@ -14,6 +15,7 @@ part 'management.dart';
 part 'login.dart';
 part 'workflow.dart';
 part 'notifications.dart';
+part 'operations.dart';
 
 const mint = Color(0xffabdabb),
     green = Color(0xff22bf74),
@@ -150,6 +152,15 @@ class AppState extends State<PosApp> {
   bool get isAdmin => member['role'] == 'admin';
   bool get isMultiBranch => isAdmin || member['role'] == 'supervisor';
   bool get isTailor => member['role'] == 'tailor';
+  bool get canReviewWork =>
+      isAdmin || ['reception', 'cashier'].contains(member['role']);
+  bool canOperate(String action) =>
+      isAdmin ||
+      (!isTailor && (member['permissions'] as Map? ?? {})[action] == true);
+  int invoiceNet(Json order) => ['Voided', 'Refunded'].contains(order['status'])
+      ? 0
+      : (order['total'] as num).toInt() -
+            ((order['refunded_total'] as num?)?.toInt() ?? 0);
   List<Json> get catalogue => maps(boot?['catalogue']);
   List<Json> get branches => maps(boot?['branches']);
   List<Json> get employees => maps(boot?['staff'])
@@ -515,6 +526,7 @@ class AppState extends State<PosApp> {
                             padding: const EdgeInsets.only(bottom: 18),
                             child: f.options != null
                                 ? DropdownButtonFormField<String>(
+                                    isExpanded: true,
                                     initialValue: f.options!.contains(f.initial)
                                         ? f.initial
                                         : f.options!.first,
@@ -525,7 +537,10 @@ class AppState extends State<PosApp> {
                                         .map(
                                           (s) => DropdownMenuItem(
                                             value: s,
-                                            child: Text(s),
+                                            child: Text(
+                                              s,
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
                                           ),
                                         )
                                         .toList(),

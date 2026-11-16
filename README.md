@@ -8,6 +8,8 @@ See [Local setup and your own deployment](docs/LOCAL-SETUP.md). All current work
 
 The POS can be installed as a web app and includes a staff notification inbox and optional device alerts. See [installation, notifications and future Android/iOS apps](docs/APP-AND-NOTIFICATIONS.md).
 
+Service-level assignments, reception checks, backjobs, work credit and linked refund/cancellation/charge invoices are described in [Service workflows](docs/SERVICE-WORKFLOWS.md). Admin must grant refund and cancellation permissions to staff.
+
 The project folders are:
 
 - `frontend/lib/` ? Flutter screens and workflows; `frontend/web/` contains browser assets.

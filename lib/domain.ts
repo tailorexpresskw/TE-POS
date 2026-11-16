@@ -7,7 +7,24 @@ export const BRANCHES = [
 ];
 export const METHODS = ['Cash', 'K-NET', 'Visa / Mastercard', 'Bank transfer'];
 export const STATUSES = ['Ongoing','Prepared','Packed','Out for Delivery','Delivered','Closed'];
-export const JOB_STATUSES = ['Pending','In Progress','On Hold','Completed'];
+export const JOB_STATUSES = ['Pending','In Progress','On Hold','Awaiting Review','Completed'];
+export const CANCELLATION_REASONS=['Customer request','Duplicate invoice','Incorrect services','Unable to complete','Other'];
+export function canOperate(member:{role:string;permissions?:any},permission:string) {
+  return member.role==='admin'||(['manager','supervisor','reception','cashier'].includes(member.role)&&member.permissions?.[permission]===true);
+}
+export function canReview(member:{role:string}) {return ['admin','reception','cashier'].includes(member.role);}
+// Allocate invoice discounts in integer fils. Work credit excludes delivery/extra charges.
+export function lineValues(order:any):number[] {
+  const lines=typeof order.lines==='string'?JSON.parse(order.lines):order.lines;
+  const gross=lines.map((l:any)=>integer(l.price*l.qty,'Service value'));
+  const subtotal=gross.reduce((n:number,v:number)=>n+v,0),discount=integer(order.discount??0,'Discount');
+  if(!subtotal)return gross;
+  const net=subtotal-discount,values=gross.map((v:number)=>Number(BigInt(v)*BigInt(net)/BigInt(subtotal)));
+  let left=net-values.reduce((n:number,v:number)=>n+v,0);
+  const ranked=gross.map((v:number,i:number)=>({i,remainder:Number(BigInt(v)*BigInt(net)%BigInt(subtotal))})).sort((a:{remainder:number;i:number},b:{remainder:number;i:number})=>b.remainder-a.remainder||a.i-b.i);
+  for(const {i}of ranked){if(left--<=0)break;values[i]++;}return values;
+}
+export function netTotal(order:any) {return ['Voided','Refunded'].includes(order.status)?0:Math.max(0,order.total-(order.refunded_total??0));}
 export const ROLES = ['admin','manager','supervisor','reception','tailor'];
 export function canonicalRole(role:string) {return role==='cashier'?'reception':role;}
 export function isManagerRole(role:string) {return ['admin','manager','supervisor'].includes(canonicalRole(role));}

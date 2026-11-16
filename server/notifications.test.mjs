@@ -43,9 +43,11 @@ test('notification inbox, branch privacy, durable push retries and device owners
     failNext=true;await app.push.flush();const retry=app.storage.sqlite.prepare("SELECT * FROM push_deliveries WHERE sent_at=''").get();assert.equal(retry.attempts,1);assert.ok(retry.next_attempt);
     app.storage.sqlite.prepare("UPDATE push_deliveries SET next_attempt='' WHERE sent_at=''").run();await app.push.flush();assert.equal(sent.length,2);
     work=await call('tracking/'+sale.id,'tailorone',{action:'progress',status:'In Progress',version:work.version});
-    const responses=await Promise.all([1,2].map(()=>fetch(base+'/api/tracking/'+sale.id,{method:'POST',headers:{Cookie:cookies.tailorone,'Content-Type':'application/json',Origin:base},body:JSON.stringify({action:'progress',status:'Completed',version:work.version})})));
+    const responses=await Promise.all([1,2].map(()=>fetch(base+'/api/tracking/'+sale.id,{method:'POST',headers:{Cookie:cookies.tailorone,'Content-Type':'application/json',Origin:base},body:JSON.stringify({action:'progress',status:'Awaiting Review',version:work.version})})));
     assert.deepEqual(responses.map(r=>r.status).sort(),[200,409]);
-    const complete=await call('notifications','reception');assert.equal(complete.items.filter(n=>n.type==='completed').length,1);assert.equal(complete.unread,2);
+    const complete=await call('notifications','reception');assert.equal(complete.items.filter(n=>n.type==='review').length,1);assert.equal(complete.unread,2);
+    const submitted=await call('tracking/'+sale.id,'reception');await call('tracking/'+sale.id,'reception',{action:'review',approved:true,version:submitted.job.version});
+    assert.equal((await call('notifications','admin')).items.filter(n=>n.type==='completed').length,1);
     expired=true;await app.push.flush();assert.equal(app.storage.sqlite.prepare('SELECT COUNT(*) n FROM push_subscriptions WHERE member_id=?').get(users.reception).n,0);expired=false;
     const later=await call('orders','reception',invoice());
     await call('orders/'+later.id,'reception',{action:'assign',tailorId:users.tailortwo,version:later.version});

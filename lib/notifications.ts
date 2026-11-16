@@ -6,12 +6,12 @@ export function createNotifications(db:Database,publicKey='') {
   const stmt=(sql:string,...args:any[])=>db.prepare(sql).bind(...args);
   function visible(member:Row) {
     const args:any[]=[member.id];
-    let sql="n.member_id=? AND o.status NOT IN ('Voided','Refunded') AND EXISTS (SELECT 1 FROM branches b WHERE b.id=n.branch AND b.active=1)";
+    let sql="n.member_id=? AND (n.type IN ('refund','cancellation','work_cancelled') OR o.status NOT IN ('Voided','Refunded')) AND EXISTS (SELECT 1 FROM branches b WHERE b.id=n.branch AND b.active=1)";
     if(member.role!=='admin') {
       if(!member.branches.length)sql+=' AND 0';
       else {sql+=` AND n.branch IN (${member.branches.map(()=>'?').join(',')})`;args.push(...member.branches);}
     }
-    if(canonicalRole(member.role)==='tailor'){sql+=" AND n.type='assigned' AND o.tailor_id=?";args.push(member.id);}
+    if(canonicalRole(member.role)==='tailor'){sql+=" AND n.type IN ('assigned','work_changed','work_cancelled') AND EXISTS(SELECT 1 FROM work_items w WHERE w.order_id=o.id AND w.tailor_id=? AND (w.status<>'Cancelled' OR n.type='work_cancelled') AND (n.task_id IS NULL OR w.id=n.task_id))";args.push(member.id);}
     return {sql,args};
   }
   function assigned(id:string,version:number,actor:string):Statement {

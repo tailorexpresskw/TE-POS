@@ -1,5 +1,40 @@
 import 'api.dart';
 
+String documentLabel(Json order) => switch (order['document_type']) {
+  'refund' => 'Refund credit note',
+  'cancellation' => 'Cancellation note',
+  'charge' => 'Additional charge invoice',
+  _ => order['kind'] == 'quotation' ? 'Quotation' : 'Customer invoice',
+};
+
+String workSlipsHtml(Json order, List<Json> tasks, String branch) {
+  final open = tasks
+      .where((task) => !['Completed', 'Cancelled'].contains(task['status']))
+      .toList();
+  final rows = open.isNotEmpty
+      ? open
+      : tasks
+            .where(
+              (task) =>
+                  task['status'] != 'Cancelled' && task['is_latest'] == true,
+            )
+            .toList();
+  final groups = <String, List<Json>>{};
+  for (final task in rows) {
+    (groups[task['tailor_name'] ?? 'Unassigned'] ??= []).add(task);
+  }
+  final fontBase = Api.uri(
+    'boot',
+  ).resolve('/pos/assets/assets/fonts').toString();
+  return '''<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Work slips ${_html(order['bill'])}</title>
+<style id="paper">@page{size:80mm 297mm;margin:4mm}</style><style>
+@font-face{font-family:Work;src:url('${_html(fontBase)}/Roboto-Regular.ttf')}@font-face{font-family:Arabic;src:url('${_html(fontBase)}/NotoSansArabic.ttf')}
+*{box-sizing:border-box}body{margin:0;font:13px Work,Arabic,Arial,sans-serif;color:#111}.slip{width:72mm;padding:3mm 0;overflow-wrap:anywhere;break-after:page}.slip:last-child{break-after:auto}.service{border-top:1px dashed #333;margin-top:12px;padding-top:10px;break-inside:avoid}.note{white-space:pre-wrap}h1{font-size:18px}h2{font-size:15px}button{margin:10px;padding:12px}@media print{button{display:none}.slip{width:100%}}
+</style></head><body><button onclick="prepare().then(()=>window.print())">Print tailor work slips</button>
+${groups.entries.map((group) => '<section class="slip"><h1>Tailor Express</h1><div>${_html(branch)} · Tailor work slip</div><h2>${_html(order['bill'])}</h2><b>Tailor: ${_html(group.key)}</b><div>Customer: ${_html(order['customer_name'])}</div><div>Collection: ${_html(order['due_date'])}</div>${group.value.map((task) => '<div class="service"><b>${_html(task['quantity'])} × ${_html(task['name'])}</b><div>${_html(task['kind'] == 'backjob' ? 'Backjob' : 'Service')} · ${_html(task['status'])}</div><div class="note" dir="auto">${_html(task['note'])}</div>${(task['reason'] ?? '') == '' ? '' : '<div class="note">Instructions: ${_html(task['reason'])}</div>'}</div>').join()}<p>Submit finished work for reception check.</p></section>').join()}
+<script>async function prepare(){await document.fonts.ready;const heights=[...document.querySelectorAll('.slip')].map(s=>s.getBoundingClientRect().height*25.4/96);document.querySelector('#paper').textContent='@page{size:80mm '+Math.ceil(Math.max(100,...heights)+8)+'mm;margin:4mm}';}prepare();</script></body></html>''';
+}
+
 String _html(dynamic value) => (value ?? '')
     .toString()
     .replaceAll('&', '&amp;')
@@ -18,7 +53,11 @@ String invoiceHtml(
 }) {
   final lines = (order['lines'] as List? ?? []).cast<Map>();
   final reversed = ['Voided', 'Refunded'].contains(order['status']);
-  final due = reversed ? 0 : (order['total'] as num) - (order['paid'] as num);
+  final credit = ['refund', 'cancellation'].contains(order['document_type']);
+  final refunded = (order['refunded_total'] as num?) ?? 0;
+  final due = reversed || credit
+      ? 0
+      : (order['total'] as num) - refunded - (order['paid'] as num);
   final fonts = fontBase == null
       ? ''
       : '''
@@ -44,8 +83,9 @@ ${mobile ? '.invoice{border-radius:12px;font-size:14px}th,td{font-size:12px}head
 @media print{body{background:white}.toolbar{display:none}.invoice{margin:0;width:100%;border-radius:0;box-shadow:none;padding:${mobile ? '4mm' : '0'}}}
 </style></head><body>
 <div class="toolbar"><button onclick="printInvoice()">${mobile ? 'Save WhatsApp PDF' : 'Print invoice'}</button><p>${mobile ? 'Choose Save as PDF, then attach the saved invoice manually in WhatsApp.' : '80 mm receipt paper · 72 mm content · print at 100% scale with browser headers and footers off.'}</p></div>
-<main class="invoice"><header>$logo<h1>Tailor Express</h1><div class="branch">${_html(branch)}</div><div class="subtitle">${order['kind'] == 'quotation' ? 'Quotation / عرض سعر' : 'Invoice / الفاتورة'}</div></header>
+<main class="invoice"><header>$logo<h1>Tailor Express</h1><div class="branch">${_html(branch)}</div><div class="subtitle">${_html(documentLabel(order))}</div></header>
 <div class="rule"></div><h2>ORDER #${_html(order['bill'])}</h2>
+${(order['parent_bill'] ?? '').toString().isEmpty ? '' : row('Original invoice', order['parent_bill'], bold: true)}
 ${mobile ? '' : row('Cashier', order['cashier'])}
 ${row('Date / التاريخ', displayDate(order['created_at']))}
 ${row('Customer / العميل', order['customer_name'], bold: true)}
@@ -55,17 +95,20 @@ ${(order['due_date'] ?? '').toString().isEmpty ? '' : '<section>${row('Collectio
 <section><table><thead><tr><th># Description<br><span class="arabic">الوصف</span></th><th>Qty<br>كمية</th><th>Price<br>سعر</th><th>Amount<br>إجمالي</th></tr></thead><tbody>
 ${lines.indexed.map((entry) {
     final (i, l) = entry;
-    return '<tr><td>${i + 1}. ${_html(l['name'])}${(l['arabic'] ?? '').toString().isEmpty ? '' : '<div class="arabic">${_html(l['arabic'])}</div>'}${(l['note'] ?? '').toString().isEmpty ? '' : '<span class="note" dir="auto">${_html(l['note'])}</span>'}</td><td>${_html(l['qty'])}</td><td>${money(l['price'])}</td><td>${money(l['price'] * l['qty'])}</td></tr>';
+    return '<tr><td>${i + 1}. ${_html(l['name'])}${(l['arabic'] ?? '').toString().isEmpty ? '' : '<div class="arabic">${_html(l['arabic'])}</div>'}${(l['note'] ?? '').toString().isEmpty ? '' : '<span class="note" dir="auto">${_html(l['note'])}</span>'}</td><td>${_html(l['qty'])}</td><td>${money(l['price'])}</td><td>${money(l['amount'] ?? l['price'] * l['qty'])}</td></tr>';
   }).join()}
 </tbody></table></section><div class="rule"></div>
 ${row('Gross / الإجمالي', money(order['subtotal'] ?? order['total']), bold: true)}
 ${row('Discount / الخصم', money(order['discount'] ?? 0))}
 ${(order['extra'] ?? 0) == 0 ? '' : row('Extra', money(order['extra']))}
 <div class="total">${row('Net Amount / المبلغ الصافي', money(order['total']))}</div>
-${row('Paid / المدفوع', money(order['paid']))}
+${refunded == 0 ? '' : row('Refunds / cancellations', money(refunded))}
+${refunded == 0 ? '' : row('Current amount', money((order['total'] as num) - refunded), bold: true)}
+${credit ? row('Cash returned', money(order['cash_returned'] ?? 0)) : row('Paid / المدفوع', money(order['paid']))}
 ${row('Balance Due / المتبقي', money(due), bold: true)}
 ${payments.isEmpty ? '' : '<section><table class="payments"><thead><tr><th>Payment type / نوع الدفع</th><th>Amount / المبلغ</th></tr></thead><tbody>${payments.map((p) => '<tr><td>${_html(p['method'])}</td><td>${money(p['amount'])}</td></tr>').join()}</tbody></table></section>'}
-<section>${row('Status', order['status'])}${mobile ? '' : row('Tailor', order['tailor_name'] ?? 'Unassigned')}</section>
+<section>${row('Status', order['status'])}${(order['job_status'] ?? '').toString().isEmpty ? '' : row('Work status', order['job_status'])}${mobile || credit ? '' : row('Tailor', order['tailor_name'] ?? 'Unassigned')}</section>
+${(order['reason'] ?? '').toString().isEmpty ? '' : '<section>${row('Reason', order['reason_code'])}<div class="note">${_html(order['reason'])}</div></section>'}
 ${!mobile && (order['notes'] ?? '').toString().isNotEmpty ? '<section><b>Order notes</b><div class="note" dir="auto">${_html(order['notes'])}</div></section>' : ''}
 <footer class="footer">Thank you for choosing Tailor Express.<br><span class="arabic">شكراً لاختياركم تيلور إكسبرس</span></footer></main>
 <script>

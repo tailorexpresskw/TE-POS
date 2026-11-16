@@ -54,7 +54,8 @@ test('Admin creates durable branches; Supervisors only oversee their assigned br
     const tailor=boot.staff.find(m=>m.role==='tailor');
     const assigned=await call('orders/'+first.id,'supervisor',{action:'assign',tailorId:tailor.id,version:first.version});
     const done=await call('tracking/'+first.id,'tailor',{action:'progress',status:'In Progress',version:assigned.version});
-    await call('tracking/'+first.id,'tailor',{action:'progress',status:'Completed',version:done.version});
+    const submitted=await call('tracking/'+first.id,'tailor',{action:'progress',status:'Awaiting Review',version:done.version});
+    await call('tracking/'+first.id,'admin',{action:'review',approved:true,version:submitted.version});
     assert.ok((await call('notifications','supervisor')).items.some(n=>n.order_id===first.id&&n.type==='completed'));
     // Revocation takes effect with the existing session, including combined queries and inbox.
     await call('members','admin',{id:boot.member.id,name:'Supervisor',username:'supervisor',role:'supervisor',branches:['zahra']});

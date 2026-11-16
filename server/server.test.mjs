@@ -52,7 +52,7 @@ test('standalone accounts, sessions, branch permissions, payments and persistenc
     assert.equal((await fetch(base+'/')).status,200);
   }finally{await app.close();}
   const reopened=await createApp({dataDirectory:folder,production:false});
-  assert.equal(reopened.auth.needsSetup(),false);assert.equal(reopened.storage.sqlite.prepare('SELECT count(*) AS n FROM orders').get().n,1);await reopened.close();
+  assert.equal(reopened.auth.needsSetup(),false);assert.equal(reopened.storage.sqlite.prepare('SELECT count(*) AS n FROM orders').get().n,2);assert.equal(reopened.storage.sqlite.prepare("SELECT count(*) AS n FROM orders WHERE document_type='refund'").get().n,1);await reopened.close();
 });
 
 test('public production does not expose first-admin registration',async()=>{

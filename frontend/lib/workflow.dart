@@ -1,6 +1,12 @@
 part of 'app.dart';
 
-const jobStatuses = ['Pending', 'In Progress', 'On Hold', 'Completed'];
+const jobStatuses = [
+  'Pending',
+  'In Progress',
+  'On Hold',
+  'Awaiting Review',
+  'Completed',
+];
 String roleLabel(dynamic value) => switch (value) {
   'admin' => 'Admin',
   'reception' || 'cashier' => 'Reception',
@@ -58,6 +64,11 @@ extension Workflow on AppState {
         ('Pending', jobSummary['pending'] ?? 0, Icons.schedule),
         ('In Progress', jobSummary['in_progress'] ?? 0, Icons.content_cut),
         ('On Hold', jobSummary['on_hold'] ?? 0, Icons.pause_circle_outline),
+        (
+          'Awaiting Review',
+          jobSummary['awaiting_review'] ?? 0,
+          Icons.fact_check_outlined,
+        ),
         ('Completed', jobSummary['completed'] ?? 0, Icons.task_alt),
       ];
       final visible = isTailor ? metrics.skip(1).toList() : metrics;
@@ -132,7 +143,12 @@ extension Workflow on AppState {
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
               ),
               ...jobs
-                  .where((j) => j['tailor_id'] == null)
+                  .where(
+                    (j) =>
+                        (j['unassigned_count'] ??
+                            (j['tailor_id'] == null ? 1 : 0)) >
+                        0,
+                  )
                   .take(3)
                   .map(
                     (j) => Padding(
@@ -263,6 +279,7 @@ extension Workflow on AppState {
             },
           ),
           const SizedBox(height: 20),
+          operationsOverview(),
           panel(
             Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
@@ -272,47 +289,80 @@ extension Workflow on AppState {
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w600),
                 ),
                 const SizedBox(height: 14),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: DataTable(
-                    columns: const [
-                      DataColumn(label: Text('BRANCH')),
-                      DataColumn(label: Text('INVOICES')),
-                      DataColumn(label: Text('SALES KWD')),
-                      DataColumn(label: Text('DUE KWD')),
-                      DataColumn(label: Text('UNASSIGNED')),
-                      DataColumn(label: Text('OPEN JOBS')),
-                      DataColumn(label: Text('')),
-                    ],
-                    rows: rows
-                        .map(
-                          (b) => DataRow(
-                            cells: [
-                              DataCell(Text(b['name'])),
-                              DataCell(Text('${b['invoices']}')),
-                              DataCell(Text(money(b['total']))),
-                              DataCell(Text(money(b['due']))),
-                              DataCell(Text('${b['unassigned']}')),
-                              DataCell(Text('${b['open_jobs']}')),
-                              DataCell(
-                                TextButton(
-                                  onPressed: () async {
-                                    update(() {
-                                      trackingBranch = b['id'];
-                                      jobOffset = 0;
-                                      screen = 7;
-                                    });
-                                    await run(loadData);
-                                  },
-                                  child: const Text('View jobs'),
-                                ),
-                              ),
-                            ],
+                if (MediaQuery.sizeOf(context).width < 650)
+                  ...rows.map(
+                    (row) => Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 10),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          Text(
+                            row['name'],
+                            style: const TextStyle(fontWeight: FontWeight.w600),
                           ),
-                        )
-                        .toList(),
+                          Text(
+                            '${row['invoices']} invoices · Sales ${money(row['total'])} KWD',
+                          ),
+                          Text(
+                            'Due ${money(row['due'])} KWD · ${row['open_jobs']} open jobs',
+                          ),
+                          TextButton(
+                            onPressed: () async {
+                              update(() {
+                                trackingBranch = row['id'];
+                                screen = 7;
+                                jobOffset = 0;
+                              });
+                              await run(loadData);
+                            },
+                            child: const Text('View branch work'),
+                          ),
+                        ],
+                      ),
+                    ),
                   ),
-                ),
+                if (MediaQuery.sizeOf(context).width >= 650)
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: DataTable(
+                      columns: const [
+                        DataColumn(label: Text('BRANCH')),
+                        DataColumn(label: Text('INVOICES')),
+                        DataColumn(label: Text('SALES KWD')),
+                        DataColumn(label: Text('DUE KWD')),
+                        DataColumn(label: Text('UNASSIGNED')),
+                        DataColumn(label: Text('OPEN JOBS')),
+                        DataColumn(label: Text('')),
+                      ],
+                      rows: rows
+                          .map(
+                            (b) => DataRow(
+                              cells: [
+                                DataCell(Text(b['name'])),
+                                DataCell(Text('${b['invoices']}')),
+                                DataCell(Text(money(b['total']))),
+                                DataCell(Text(money(b['due']))),
+                                DataCell(Text('${b['unassigned']}')),
+                                DataCell(Text('${b['open_jobs']}')),
+                                DataCell(
+                                  TextButton(
+                                    onPressed: () async {
+                                      update(() {
+                                        trackingBranch = b['id'];
+                                        jobOffset = 0;
+                                        screen = 7;
+                                      });
+                                      await run(loadData);
+                                    },
+                                    child: const Text('View jobs'),
+                                  ),
+                                ),
+                              ],
+                            ),
+                          )
+                          .toList(),
+                    ),
+                  ),
               ],
             ),
           ),
@@ -321,7 +371,15 @@ extension Workflow on AppState {
           const SizedBox(height: 18),
           jobPreview(
             'Invoices needing assignment',
-            jobs.where((j) => j['tailor_id'] == null).take(8).toList(),
+            jobs
+                .where(
+                  (j) =>
+                      (j['unassigned_count'] ??
+                          (j['tailor_id'] == null ? 1 : 0)) >
+                      0,
+                )
+                .take(8)
+                .toList(),
           ),
         ],
       ),
@@ -481,7 +539,19 @@ extension Workflow on AppState {
                 onPressed: () => receipt(job),
                 child: const Text('Invoice / WhatsApp'),
               ),
-            if (isTailor && job['job_status'] != 'Completed')
+            if (isTailor &&
+                (AppState.maps(job['tasks']).isEmpty
+                    ? ![
+                        'Completed',
+                        'Awaiting Review',
+                      ].contains(job['job_status'])
+                    : AppState.maps(job['tasks']).any(
+                        (task) => [
+                          'Pending',
+                          'In Progress',
+                          'On Hold',
+                        ].contains(task['status']),
+                      )))
               FilledButton(
                 onPressed: () => updateJob(job),
                 child: const Text('Update progress'),
@@ -559,6 +629,7 @@ extension Workflow on AppState {
             for (final filter in [
               'All',
               if (!isTailor) 'Unassigned',
+              'Backjobs',
               ...jobStatuses,
             ])
               ChoiceChip(
@@ -587,8 +658,16 @@ extension Workflow on AppState {
             .where(
               (j) =>
                   (jobFilter == 'All' ||
-                      (jobFilter == 'Unassigned'
-                          ? j['tailor_id'] == null
+                      (jobFilter == 'Backjobs'
+                          ? AppState.maps(j['tasks']).any(
+                              (t) =>
+                                  t['kind'] == 'backjob' &&
+                                  t['status'] != 'Cancelled',
+                            )
+                          : jobFilter == 'Unassigned'
+                          ? (j['unassigned_count'] ??
+                                    (j['tailor_id'] == null ? 1 : 0)) >
+                                0
                           : j['job_status'] == jobFilter)) &&
                   '${j['bill']} ${j['customer_name']} ${j['tailor_name']}'
                       .toLowerCase()
@@ -685,18 +764,37 @@ extension Workflow on AppState {
   }
 
   Future<Json?> assignInvoice(Json invoice) async {
-    final current = Json.from(
-      (await Api.get('orders/${invoice['id']}'))['order'],
-    );
+    final detail = Json.from(await Api.get('orders/${invoice['id']}'));
+    final current = Json.from(detail['order']);
+    final tasks = AppState.maps(
+      detail['tasks'],
+    ).where((t) => !['Completed', 'Cancelled'].contains(t['status'])).toList();
+    final taskIds = tasks.isEmpty
+        ? null
+        : await chooseServiceTasks(
+            tasks,
+            title: 'Assign services / whole invoice',
+          );
+    if (tasks.isNotEmpty && taskIds == null) return null;
+    final selectedTasks = tasks
+        .where((t) => taskIds?.contains(t['id']) ?? false)
+        .toList();
     final chosen = await chooseTailor(
       current['branch'],
       current['tailor_id'] ?? '',
     );
     if (chosen == null) return null;
     var reason = '';
-    if ((current['tailor_id'] ?? '') != chosen &&
-        current['tailor_id'] != null &&
-        current['job_status'] != 'Pending') {
+    if (selectedTasks.any(
+          (t) =>
+              t['tailor_id'] != null &&
+              t['tailor_id'] != chosen &&
+              t['status'] != 'Pending',
+        ) ||
+        (tasks.isEmpty &&
+            (current['tailor_id'] ?? '') != chosen &&
+            current['tailor_id'] != null &&
+            current['job_status'] != 'Pending')) {
       final answer = await form('Reassign work', [
         const Field(
           'reason',
@@ -714,6 +812,7 @@ extension Workflow on AppState {
         'tailorId': chosen,
         'version': current['version'],
         'reason': reason,
+        'taskIds': ?taskIds,
       }),
     );
     updated['tailor_name'] = chosen.isEmpty
@@ -724,22 +823,50 @@ extension Workflow on AppState {
     return updated;
   }
 
-  Future<void> updateJob(Json job, {bool noteOnly = false}) async {
+  Future<void> updateJob(Json job, {bool noteOnly = false, Json? task}) async {
     try {
       final current = Json.from(
         (await Api.get('tracking/${job['id']}'))['job'],
       );
       final transitions = {
         'Pending': ['In Progress', 'On Hold'],
-        'In Progress': ['On Hold', 'Completed'],
+        'In Progress': ['On Hold', 'Awaiting Review'],
         'On Hold': ['In Progress'],
+        'Awaiting Review': <String>[],
         'Completed': <String>[],
       };
-      final options = isManager
-          ? jobStatuses
-          : transitions[current['job_status']] ?? <String>[];
+      final tasks = AppState.maps(current['tasks'])
+          .where(
+            (t) =>
+                t['tailor_id'] != null &&
+                t['status'] != 'Cancelled' &&
+                (noteOnly ||
+                    !['Completed', 'Awaiting Review'].contains(t['status'])),
+          )
+          .toList();
+      final ids = task != null
+          ? ['${task['id']}']
+          : tasks.isEmpty
+          ? null
+          : await chooseServiceTasks(tasks, title: 'Update selected services');
+      if (tasks.isNotEmpty && ids == null) return;
+      final selectedTasks = tasks
+          .where((t) => ids?.contains(t['id']) ?? false)
+          .toList();
+      final states = selectedTasks.isEmpty
+          ? [current['job_status']]
+          : selectedTasks.map((t) => t['status']).toList();
+      final options = (transitions[states.first] ?? <String>[])
+          .where(
+            (option) => states.every(
+              (status) => (transitions[status] ?? <String>[]).contains(option),
+            ),
+          )
+          .toList();
       if (!noteOnly && options.isEmpty) {
-        notice('This work is complete.');
+        notice(
+          'Select services with the same work status. Finished services require reception review.',
+        );
         return;
       }
       final result =
@@ -764,6 +891,7 @@ extension Workflow on AppState {
           ...result,
           'action': noteOnly ? 'note' : 'progress',
           'version': current['version'],
+          'taskIds': ?ids,
         });
         await loadData();
         notice('Tracking updated.');
@@ -776,6 +904,10 @@ extension Workflow on AppState {
   Future<void> jobDetail(Json job) async {
     try {
       final detail = Json.from(await Api.get('tracking/${job['id']}'));
+      if (AppState.maps(detail['job']?['tasks']).isNotEmpty) {
+        await serviceTrackingDetails(detail);
+        return;
+      }
       final row = Json.from(detail['job']);
       await modal(
         'Job ${row['bill']}',

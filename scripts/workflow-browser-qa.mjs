@@ -16,11 +16,13 @@ await post('members',{name:'QA Reception',email:'reception@qa.test',role:'recept
 await post('members',{name:'QA Manager',username:'qa.manager',role:'manager',branches:['zahra'],password});
 await post('members',{name:'QA Supervisor',username:'qa.supervisor',role:'supervisor',branches:['zahra','avenues'],password});
 const tailor=await post('members',{name:'QA Tailor',email:'tailor@qa.test',role:'tailor',branches:['zahra'],password});
+const fixingTailor=await post('members',{name:'QA Fixing Tailor',username:'qa.fixer',role:'tailor',branches:['zahra'],password});
 await post('members',{name:'Other Branch Tailor',email:'other@qa.test',role:'tailor',branches:['avenues'],password});
 const customer=await post('customers',{name:'QA Customer',phone:'55551234',address:'Kuwait City'});
-await post('orders',{id:randomUUID(),branch:'zahra',kind:'sale',customerId:customer.id,tailorId:tailor.id,lines:[{id:'1001',qty:1,price:2000,note:'Hem to 90 cm'}],payments:[],dueDate:'2026-11-03',notes:'QA garment instructions'});
+const mainInvoice=await post('orders',{id:randomUUID(),branch:'zahra',kind:'sale',customerId:customer.id,tailorId:tailor.id,lines:[{id:'1001',qty:1,price:2000,note:'Hem to 90 cm'}],payments:[],dueDate:'2026-11-03',notes:'QA garment instructions'});
+async function get(route){const response=await fetch(base+'/api/'+route,{headers:{Cookie:'te_pos_session='+sessions.admin}});assert.equal(response.status,200);return response.json();}
 await login('manager','qa.manager');await login('supervisor','qa.supervisor');await login('reception','reception@qa.test');await login('tailor','tailor@qa.test');
-const child=spawn(process.env.CHROME_BIN||'C:/Program Files/Google/Chrome/Application/chrome.exe',['--headless=new','--disable-gpu','--no-first-run','--no-default-browser-check','--remote-debugging-port=9334',`--user-data-dir=${path.join(output,'workflow-chrome-profile')}`,'about:blank'],{stdio:'ignore',windowsHide:true});
+const child=spawn(process.env.CHROME_BIN||'C:/Program Files/Google/Chrome/Application/chrome.exe',['--headless=new','--force-renderer-accessibility','--disable-gpu','--no-first-run','--no-default-browser-check','--remote-debugging-port=9334',`--user-data-dir=${path.join(output,'workflow-chrome-profile')}`,'about:blank'],{stdio:'ignore',windowsHide:true});
 const sleep=ms=>new Promise(resolve=>setTimeout(resolve,ms));let ws;
 try{
   let pages;for(let n=0;n<50;n++){try{pages=await(await fetch('http://127.0.0.1:9334/json/list')).json();if(pages.length)break;}catch{}await sleep(200);}
@@ -31,7 +33,7 @@ try{
   const send=(method,params={})=>new Promise((resolve,reject)=>{const id=++sequence;pending.set(id,{resolve,reject});ws.send(JSON.stringify({id,method,params}));});
   const evaluate=async expression=>(await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true,userGesture:true})).result?.value;
   const screenshot=async name=>{const image=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:false});writeFileSync(path.join(output,name+'.png'),Buffer.from(image.data,'base64'));};
-  async function wait(expression){for(let n=0;n<100;n++){if(await evaluate(expression))return;await sleep(150);}await screenshot('workflow-failure');writeFileSync(path.join(output,'workflow-browser-dom.txt'),await evaluate('document.body.outerHTML'));throw new Error('Browser timeout: '+expression);}
+  async function wait(expression){for(let n=0;n<100;n++){if(await evaluate(expression))return;if(n%5===0&&!expression.includes('flt-semantics-placeholder'))await evaluate("document.querySelector('flt-semantics-placeholder')?.click()");await sleep(150);}await screenshot('workflow-failure');writeFileSync(path.join(output,'workflow-browser-dom.txt'),await evaluate('document.body.outerHTML'));throw new Error('Browser timeout: '+expression);}
   async function click(label){await wait(`(()=>{const e=[...document.querySelectorAll('[role=button]')].find(e=>(e.getAttribute('aria-label')||e.textContent||'').trim().split(String.fromCharCode(10))[0].trim()===${JSON.stringify(label)});if(!e)return false;e.click();return true;})()`);await sleep(300);}
   async function fill(label,text){
     const expression=`(()=>{const e=[...document.querySelectorAll('input,textarea,[role=textbox]')].find(e=>(e.getAttribute('aria-label')||'').includes(${JSON.stringify(label)}));if(!e)return null;const r=e.getBoundingClientRect();return {x:r.x+r.width/2,y:r.y+r.height/2};})()`;
@@ -50,10 +52,11 @@ try{
     const call=(method,params={})=>new Promise((resolve,reject)=>{const token=++id;pending.set(token,{resolve,reject});socket.send(JSON.stringify({id:token,method,params}));});
     try{
       await call('Page.enable');await call('Runtime.enable');await call('Emulation.setDeviceMetricsOverride',{width,height:1000,deviceScaleFactor:1,mobile:false});
-      for(let n=0;n<50;n++){const r=await call('Runtime.evaluate',{expression:'typeof sizePaper',returnByValue:true});if(r.result.value==='function')break;await sleep(100);}
-      await call('Runtime.evaluate',{expression:'sizePaper()',awaitPromise:true});
+      for(let n=0;n<50;n++){const r=await call('Runtime.evaluate',{expression:"typeof sizePaper==='function'||typeof prepare==='function'",returnByValue:true});if(r.result.value)break;await sleep(100);}
+      await call('Runtime.evaluate',{expression:"(typeof sizePaper==='function'?sizePaper:prepare)()",awaitPromise:true});
       const details=(await call('Runtime.evaluate',{expression:"JSON.stringify({text:document.body.innerText,overflow:document.documentElement.scrollWidth>innerWidth,paper:document.querySelector('#paper').textContent})",returnByValue:true})).result.value;
-      const info=JSON.parse(details);assert.ok(info.text.includes('Hem to 90 cm'));assert.equal(info.overflow,false);assert.ok(info.paper.includes(name==='invoice-print'?'80mm':'108mm'));
+      const info=JSON.parse(details);assert.ok(info.text.includes('Hem to 90 cm'));assert.equal(info.overflow,false);assert.ok(info.paper.includes(name==='invoice-whatsapp'?'108mm':'80mm'));
+      if(name==='invoice-tailor-work'){assert.ok(!info.text.includes('55551234'));assert.ok(!info.text.includes('2.000'));}
       const pdf=await call('Page.printToPDF',{preferCSSPageSize:true,printBackground:true,displayHeaderFooter:false,marginTop:0,marginBottom:0,marginLeft:0,marginRight:0});
       writeFileSync(path.join(output,name+'.pdf'),Buffer.from(pdf.data,'base64'));
       const picture=await call('Page.captureScreenshot',{format:'png',captureBeyondViewport:true});writeFileSync(path.join(output,name+'.png'),Buffer.from(picture.data,'base64'));
@@ -86,6 +89,7 @@ try{
   await click('Assign tailor');await click('QA Tailor');await wait(has('Tailor: QA Tailor'));
   await exportInvoice('Print receipt / Save PDF','invoice-print',500);
   await exportInvoice('WhatsApp PDF / mobile layout','invoice-whatsapp',390);
+  await exportInvoice('Print tailor work slips','invoice-tailor-work',500);
   await click('WhatsApp invoice');await wait(has('Save WhatsApp PDF'));await screenshot('whatsapp-invoice-dialog');
   await account('tailor');await screenshot('tailor-dashboard');
   await click('Notifications');await wait(has('New tailor assignment'));await screenshot('notification-inbox');await click('Mark all as read');await click('Close');
@@ -93,6 +97,19 @@ try{
   const body=await evaluate('document.body.innerText');assert.ok(!body.includes('Total Sales')&&!body.includes('Administration'));
   await click('My Tracking');await wait(has('My Tailor Tracking'));await click('Update progress');await wait(has('Work status'));await click('Save');await wait(has('Tracking updated.'));
   await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await sleep(500);await screenshot('tailor-tracking-phone');
-  assert.deepEqual(errors,[],'Browser runtime exceptions');console.log('Chrome workflow QA passed: role dashboards, branch-only picker, assign later, reassign at printing, tailor progress, customer details, service notes both invoice PDFs, installability, service-worker privacy and the notification inbox. No WhatsApp messages were sent.');
+  const inProgress=(await get('tracking/'+mainInvoice.id)).job;
+  await post('tracking/'+mainInvoice.id,{action:'progress',status:'Awaiting Review',version:inProgress.version});
+  await send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+  await account('reception');await click('Tracking');await click('Job details');await wait(has('Check finished work'));await screenshot('reception-service-check');
+  await click('Check finished work');await click('Save');await wait(has('Work checked and approved.'));
+  const approved=(await get('tracking/'+mainInvoice.id)).job;assert.equal(approved.job_status,'Completed');
+  await post('tracking/'+mainInvoice.id,{action:'backjob',parentTaskId:approved.tasks[0].id,tailorId:fixingTailor.id,quantity:1,fault:'no_fault',note:'Customer requested a further fit',version:approved.version});
+  let financial=await post('orders',{id:randomUUID(),branch:'zahra',kind:'sale',customerId:customer.id,lines:[{id:'1001',qty:2,price:2000}],payments:[{amount:4000,method:'Cash'}]});
+  financial=await post('orders/'+financial.id,{action:'refund',id:randomUUID(),version:financial.version,lines:[{index:0,qty:1}],reason:'Customer returned one garment',method:'Cash'});
+  await post('orders/'+financial.id,{action:'cancel',id:randomUUID(),version:financial.version,reasonCode:'Customer request',reason:'Customer cancelled the remaining service',method:'Cash'});
+  await account('supervisor');await click('Refunds');await wait(has('Customer returned one garment'));await screenshot('refund-credit-notes');
+  await account('supervisor');await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await sleep(500);await screenshot('supervisor-exceptions-phone');
+  await click('Notifications');await wait(has('Backjob created'));await wait(has('Refund recorded'));await wait(has('Invoice cancelled'));await screenshot('important-notifications-phone');
+  assert.deepEqual(errors,[],'Browser runtime exceptions');console.log('Chrome workflow QA passed: desktop/phone dashboards, assignment, reception review, backjobs, refund/cancellation alerts, customer details, receipt/WhatsApp/work-slip PDFs, PWA installability and notification privacy. No WhatsApp messages or real device alerts were sent.');
   await send('Browser.close').catch(()=>{});
 }finally{ws?.close();if(child.exitCode===null)child.kill();await app.close();}

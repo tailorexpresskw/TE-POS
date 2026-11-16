@@ -185,6 +185,12 @@ extension Management on AppState {
     final password = TextEditingController();
     String role = existing?['role'] ?? 'reception';
     bool active = existing?['active'] != 0;
+    final storedPermissions = existing?['permissions'];
+    final permissions = Json.from(
+      storedPermissions is String
+          ? jsonDecode(storedPermissions)
+          : storedPermissions ?? {},
+    );
     final result = await showDialog<Json>(
       context: context,
       builder: (ctx) => StatefulBuilder(
@@ -274,6 +280,24 @@ extension Management on AppState {
                               }),
                             ),
                           ),
+                        if (!['admin', 'tailor'].contains(role)) ...[
+                          const Divider(),
+                          const Text('Permissions granted by Admin'),
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Allow refunds'),
+                            value: permissions['refund'] == true,
+                            onChanged: (value) =>
+                                set(() => permissions['refund'] = value),
+                          ),
+                          SwitchListTile(
+                            contentPadding: EdgeInsets.zero,
+                            title: const Text('Allow cancellations'),
+                            value: permissions['cancel'] == true,
+                            onChanged: (value) =>
+                                set(() => permissions['cancel'] = value),
+                          ),
+                        ],
                         if (existing != null)
                           SwitchListTile(
                             contentPadding: EdgeInsets.zero,
@@ -295,6 +319,9 @@ extension Management on AppState {
                       'branches': selected,
                       'active': active ? 1 : 0,
                       'password': password.text,
+                      'permissions': role == 'tailor'
+                          ? <String, dynamic>{}
+                          : permissions,
                       if (existing != null) 'id': existing['id'],
                     }),
                     child: const Text('Save staff access'),

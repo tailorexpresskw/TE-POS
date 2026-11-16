@@ -70,7 +70,7 @@ extension NotificationInbox on AppState {
               ),
               const SizedBox(height: 10),
               const Text(
-                'New assignments appear for the assigned tailor. Completed and held jobs alert staff in the relevant branch.',
+                'Relevant staff receive assignment and work updates. Reception gets check requests; management gets backjob, refund and cancellation alerts.',
               ),
               const SizedBox(height: 16),
               Text(
@@ -172,14 +172,16 @@ extension NotificationInbox on AppState {
               ...notificationItems.map(
                 (item) => ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(
-                    item['type'] == 'assigned'
-                        ? Icons.assignment_ind_outlined
-                        : item['type'] == 'completed'
-                        ? Icons.task_alt
-                        : Icons.pause_circle_outline,
-                    color: (item['read_at'] ?? '') == '' ? green : muted,
-                  ),
+                  leading: Icon(switch (item['type']) {
+                    'assigned' => Icons.assignment_ind_outlined,
+                    'completed' => Icons.task_alt,
+                    'review' => Icons.fact_check_outlined,
+                    'backjob' => Icons.replay,
+                    'refund' => Icons.assignment_return_outlined,
+                    'cancellation' || 'work_cancelled' => Icons.cancel_outlined,
+                    'work_changed' => Icons.edit_note,
+                    _ => Icons.pause_circle_outline,
+                  }, color: (item['read_at'] ?? '') == '' ? green : muted),
                   title: Text(
                     item['title'],
                     style: TextStyle(
@@ -201,7 +203,19 @@ extension NotificationInbox on AppState {
                       await refreshNotifications();
                       if (!ctx.mounted) return;
                       Navigator.of(ctx).pop();
-                      if (isTailor) {
+                      if (item['type'] == 'work_cancelled') {
+                        notice(
+                          'This assigned work was cancelled. The notification is retained in your history.',
+                        );
+                        return;
+                      }
+                      if (isTailor ||
+                          [
+                            'review',
+                            'backjob',
+                            'completed',
+                            'on_hold',
+                          ].contains(item['type'])) {
                         await jobDetail({'id': item['order_id']});
                       } else {
                         await receipt({'id': item['order_id']});

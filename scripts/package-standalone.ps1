@@ -9,7 +9,7 @@ foreach ($folder in @('server','drizzle')) {
 foreach ($folder in @('lib','scripts','public','frontend')) {
     New-Item -ItemType Directory -Path (Join-Path $stage $folder) -Force | Out-Null
 }
-foreach ($file in @('service.ts','tracking.ts','notifications.ts','storage.ts','domain.ts','domain.test.mjs','catalogue.json')) {
+foreach ($file in @('service.ts','tracking.ts','workflow.ts','adjustments.ts','notifications.ts','storage.ts','domain.ts','domain.test.mjs','catalogue.json')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot ('lib/'+$file)) -Destination (Join-Path $stage 'lib') -Force
 }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'public/pos') -Destination (Join-Path $stage 'public') -Recurse -Force
@@ -25,6 +25,7 @@ foreach ($file in @('Start-POS.cmd','Setup-Admin.cmd','.env.example')) {
 }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/LOCAL-SETUP.md') -Destination (Join-Path $stage 'README.md') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/APP-AND-NOTIFICATIONS.md') -Destination (Join-Path $stage 'APP-AND-NOTIFICATIONS.md') -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/SERVICE-WORKFLOWS.md') -Destination (Join-Path $stage 'SERVICE-WORKFLOWS.md') -Force
 $package = @{
     name='tailor-express-pos'; version='0.4.0'; private=$true; type='module';
     engines=@{node='>=22.13.0'};
@@ -33,7 +34,7 @@ $package = @{
         start='node --env-file-if-exists=.env --experimental-strip-types server/index.mjs';
         build='node scripts/build-flutter.mjs';
         'setup-admin'='node --env-file-if-exists=.env --experimental-strip-types server/setup-admin.mjs';
-        test='node --experimental-strip-types --test server/server.test.mjs server/workflow.test.mjs server/migration.test.mjs server/notifications.test.mjs server/pwa.test.mjs server/branches.test.mjs lib/domain.test.mjs'
+        test='node --experimental-strip-types --test server/server.test.mjs server/workflow.test.mjs server/migration.test.mjs server/notifications.test.mjs server/pwa.test.mjs server/branches.test.mjs server/service-workflows.test.mjs lib/domain.test.mjs'
     }
 }
 & node (Join-Path $projectRoot 'scripts/copy-runtime-deps.mjs') $stage
@@ -59,7 +60,7 @@ for ($attempt = 0; $attempt -lt 4; $attempt++) {
         Remove-Item -LiteralPath $resolvedRelease -Recurse -Force
         break
     } catch [IO.IOException] {
-        if ($attempt -eq 3) { throw }
+        if ($attempt -eq 3) { Write-Warning "The package is ready; temporary staging is still in use: $resolvedRelease"; break }
         Start-Sleep -Milliseconds 250
     }
 }

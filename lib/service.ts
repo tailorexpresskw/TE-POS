@@ -1,8 +1,9 @@
 import source from './catalogue.json' with {type:'json'};
-import {METHODS, STATUSES, COUPONS, JOB_STATUSES, ROLES, canonicalRole, isManagerRole, check, integer, text, canAccess, calculate, kuwaitDay} from './domain.ts';
+import {METHODS, STATUSES, COUPONS, JOB_STATUSES, ROLES, canonicalRole, isManagerRole, check, integer, text, canAccess, calculate, kuwaitDay,netTotal} from './domain.ts';
 
 import {createTracking} from './tracking.ts';
 import {createNotifications} from './notifications.ts';
+import {createAdjustments} from './adjustments.ts';
 import type {Database, DocumentStore, Row} from './storage.ts';
 
 export function createService(runtime: {database: Database; bucket: DocumentStore; authenticate: (request:Request)=>Promise<{userId:string}|null>; setPassword:(id:string,password:string)=>Promise<void>;pushPublicKey?:string}) {
@@ -17,12 +18,14 @@ function log(branch:string, actor:Row, action:string, entity:string, detail='',w
 }
 const notifications=createNotifications(runtime.database,runtime.pushPublicKey);
 const branchList=()=>all('SELECT * FROM branches ORDER BY name COLLATE NOCASE');
-const tracking=createTracking({all,first,stmt,db,log,notifications,branchList,branchAccess});
+const workflow={all,first,stmt,db,log,notifications,branchList,branchAccess};
+const tracking=createTracking(workflow),adjustments=createAdjustments(workflow);
 async function identity(request:Request) {
   const user=await runtime.authenticate(request); check(user,'Sign in to continue.',401);
   const member=await first('SELECT * FROM members WHERE user_id=? AND active=1',user.userId);
   check(member,'Your account has not been given staff access. Ask your administrator.',403);
   member.role=canonicalRole(member.role);check(ROLES.includes(member.role),'Your role is not configured. Ask an administrator.',403);
+  member.permissions=JSON.parse(member.permissions??'{}');
   const available=await branchList();
   member.branches=JSON.parse(member.branches).filter((id:string)=>available.some(b=>b.id===id&&b.active===1)); return member;
 }
@@ -38,9 +41,9 @@ async function catalogue() {
   return source.map(p=>({...p,...overrides.find(o=>o.id===p.id),active:overrides.find(o=>o.id===p.id)?.active??1}));
 }
 async function order(member:Row,id:string) {
-  const result=await first('SELECT o.*,m.name tailor_name,m.active tailor_active FROM orders o LEFT JOIN members m ON m.id=o.tailor_id WHERE o.id=?',id); check(result,'Sale not found.',404); await branchAccess(member,result.branch,true); return result;
+  const result=await first("SELECT o.*,COALESCE((SELECT group_concat(DISTINCT m2.name) FROM work_items w JOIN members m2 ON m2.id=w.tailor_id WHERE w.order_id=o.id AND w.status<>'Cancelled'),m.name) tailor_name,m.active tailor_active FROM orders o LEFT JOIN members m ON m.id=o.tailor_id WHERE o.id=?",id); check(result,'Sale not found.',404); await branchAccess(member,result.branch,true); return result;
 }
-function decode(row:Row) {return {...row,lines:JSON.parse(row.lines)};}
+function decode(row:Row) {return {...row,lines:JSON.parse(row.lines),net_total:netTotal(row),due:['refund','cancellation'].includes(row.document_type)?0:Math.max(0,netTotal(row)-row.paid)};}
 function dateRange(url:URL) {
   const from=url.searchParams.get('from')||kuwaitDay(); const to=url.searchParams.get('to')||from;
   check(/^\d{4}-\d{2}-\d{2}$/.test(from)&&/^\d{4}-\d{2}-\d{2}$/.test(to)&&from<=to,'Select a valid date range.');
@@ -57,11 +60,12 @@ async function read(member:Row,path:string[],url:URL):Promise<any> {
   if(path[0]==='tracking')return tracking.read(member,path[1],url);
   tracking.office(member);
   if(path[0]==='dashboard'){const [start,end]=dateRange(url);return tracking.dashboard(member,url,start,end);}
+  if(path[0]==='exceptions'){const [start,end]=dateRange(url);return tracking.exceptions(member,url,start,end);}
   if(path[0]==='customers') {
     if(path[1]) {
       const branch=text(url.searchParams.get('branch'),100);await branchAccess(member,branch);
       const customer=await first('SELECT * FROM customers WHERE id=?',text(path[1],100));check(customer,'Customer not found.',404);
-      const summary=await first("SELECT COUNT(*) bills,COALESCE(SUM(total),0) total,COALESCE(SUM(paid),0) paid,COALESCE(SUM(total-paid),0) due,MIN(created_at) first_bill,MAX(created_at) last_bill FROM orders WHERE customer_id=? AND branch=? AND kind='sale' AND status NOT IN ('Voided','Refunded')",customer.id,branch);
+      const summary=await first("SELECT COUNT(*) bills,COALESCE(SUM(total-refunded_total),0) total,COALESCE(SUM(paid),0) paid,COALESCE(SUM(total-refunded_total-paid),0) due,MIN(created_at) first_bill,MAX(created_at) last_bill FROM orders WHERE customer_id=? AND branch=? AND kind='sale' AND status NOT IN ('Voided','Refunded')",customer.id,branch);
       const history=await all("SELECT id,bill,branch,total,paid,status,created_at FROM orders WHERE customer_id=? AND branch=? AND kind='sale' ORDER BY created_at DESC LIMIT 100",customer.id,branch);
       return {customer,summary,history};
     }
@@ -77,11 +81,21 @@ async function read(member:Row,path:string[],url:URL):Promise<any> {
   }
   if(path[0]==='orders' && path[1]) {
     const sale=await order(member,path[1]);
-    return {order:decode(sale),payments:await all('SELECT * FROM payments WHERE order_id=? ORDER BY created_at',sale.id),attachments:await all('SELECT id,name,type FROM attachments WHERE order_id=?',sale.id)};
+    const parent=sale.parent_order_id?await first('SELECT id,bill FROM orders WHERE id=?',sale.parent_order_id):null;
+    if(path[2]==='customer-status'){
+      const work=await tracking.tasks(sale);
+      return {invoice:sale.bill,status:sale.status,workStatus:sale.job_status,collectionDate:sale.due_date,
+        services:JSON.parse(sale.lines).map((l:Row,i:number)=>({name:l.name,quantity:l.qty,status:work.filter(w=>w.line_index===i&&w.is_latest).map(w=>w.status)}))};
+    }
+    const returned=parent?await first('SELECT COALESCE(-SUM(amount),0) amount FROM payments WHERE order_id=? AND amount<0 AND instr(reference,?)=1',parent.id,sale.bill):null;
+    return {order:{...decode(sale),parent_bill:parent?.bill??'',cash_returned:returned?.amount??0},parent,
+      related:await all('SELECT id,bill,document_type,total,paid,refunded_total,status,created_at FROM orders WHERE parent_order_id=? ORDER BY created_at',sale.id),
+      refundOptions:sale.kind==='sale'?await adjustments.options(sale):[],
+      tasks:await tracking.tasks(sale),payments:await all('SELECT * FROM payments WHERE order_id=? ORDER BY created_at',sale.id),attachments:await all('SELECT id,name,type FROM attachments WHERE order_id=?',sale.id)};
   }
   if(path[0]==='admin') {
     admin(member); const [start,end]=dateRange(url);
-    return {branches:await branchList(),members:(await all('SELECT id,email,username,name,role,branches,active FROM members ORDER BY role,name')).map(m=>({...m,role:canonicalRole(m.role)})),audit:await all('SELECT * FROM audit ORDER BY created_at DESC LIMIT 150'),summary:await all("SELECT branch,COUNT(*) count,SUM(total) total,SUM(paid) paid,SUM(total-paid) due FROM orders WHERE kind='sale' AND status NOT IN ('Voided','Refunded') AND created_at BETWEEN ? AND ? GROUP BY branch",start,end)};
+    return {branches:await branchList(),members:(await all('SELECT id,email,username,name,role,branches,active,permissions FROM members ORDER BY role,name')).map(m=>({...m,role:canonicalRole(m.role)})),audit:await all('SELECT * FROM audit ORDER BY created_at DESC LIMIT 150'),summary:await all("SELECT branch,COUNT(*) count,SUM(total-refunded_total) total,SUM(paid) paid,SUM(total-refunded_total-paid) due FROM orders WHERE kind='sale' AND status NOT IN ('Voided','Refunded') AND created_at BETWEEN ? AND ? GROUP BY branch",start,end)};
   }
   check(false,'Endpoint not found.',404);
 }
@@ -138,6 +152,8 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
     const externalId=sourceId?`converted:${sourceId}`:null;
     operations.push(stmt('INSERT INTO orders (id,branch,bill,kind,customer_id,customer_name,phone,address,lines,subtotal,discount,extra,total,paid,notes,cashier,cashier_id,staff,aggregator,status,created_at,updated_at,due_date,version,external_id,coupon,tailor_id,job_status,assigned_at,job_updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)',id,branch,bill,kind,customer?.id??null,customer?.name??'Walk-in customer',customer?.phone??'',customer?.address??'',JSON.stringify(totals.lines),totals.subtotal,totals.discount,totals.extra,totals.total,paid,text(body.notes,4000),member.name,member.user_id,staff,text(body.aggregator,100),kind==='held'?'Held':kind==='quotation'?'Quotation':'Ongoing',timestamp,timestamp,text(body.dueDate,30),0,externalId,text(body.coupon,50),tailorId||null,'Pending',tailorId?timestamp:'',tailorId?timestamp:''));
     if(tailorId&&kind==='sale')operations.push(tracking.event(member,{id,branch},'assigned',JSON.stringify({from:'',to:tailorId,note:'Assigned at invoicing'}),false,`assigned:${id}:0`));
+    if(kind==='sale')operations.push(...tracking.initialTasks(id,branch,totals.lines,tailorId,timestamp));
+    if(kind==='sale')operations.push(stmt('INSERT INTO integration_events(id,order_id,branch,type,payload,created_at) VALUES (?,?,?,?,?,?)',uuid(),id,branch,'invoice.created',JSON.stringify({orderId:id,bill,branch,sourceId}),timestamp));
     for(const p of payments) operations.push(stmt('INSERT INTO payments (id,order_id,branch,amount,method,reference,actor,created_at) VALUES (?,?,?,?,?,?,?,?)',uuid(),id,branch,p.amount,p.method,p.reference,member.user_id,timestamp));
     for(const doc of docs) operations.push(stmt('UPDATE attachments SET order_id=? WHERE id=?',id,doc));
     operations.push(log(branch,member,`${kind}.created`,id,sourceId?`Converted ${sourceId}`:''));
@@ -146,6 +162,9 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
   }
   if(path[0]==='orders' && path[1]) {
     const sale=await order(member,path[1]),action=text(body.action,40);
+    if(['refund','void','cancel','charge'].includes(action)){
+      const result=await adjustments.write(member,sale,body);return {...decode(result.order),adjustment:decode(result.document)};
+    }
     const version=integer(body.version,'Version');
     if(action==='payment') {
       const duplicate=await first('SELECT * FROM payments WHERE id=?',text(body.id,100));
@@ -159,10 +178,10 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
       const id=text(body.id,100); check(/^[a-zA-Z0-9-]{16,100}$/.test(id),'Missing payment identifier.');
       const duplicate=await first('SELECT * FROM payments WHERE id=?',id);
       if(duplicate) {check(duplicate.order_id===sale.id,'Payment identifier conflict.',409); return decode(sale);}
-      const amount=integer(body.amount,'Payment',1),method=text(body.method,40); check(METHODS.includes(method),'Unknown payment method.'); check(amount<=sale.total-sale.paid,'Payment exceeds balance due.');
+      const amount=integer(body.amount,'Payment',1),method=text(body.method,40); check(METHODS.includes(method),'Unknown payment method.'); check(amount<=netTotal(sale)-sale.paid,'Payment exceeds balance due.');
       const timestamp=now();
       const results=await db().batch([
-        stmt('UPDATE orders SET paid=paid+?,version=version+1,updated_at=? WHERE id=? AND version=? AND paid+?<=total RETURNING id',amount,timestamp,sale.id,version,amount),
+        stmt('UPDATE orders SET paid=paid+?,version=version+1,updated_at=? WHERE id=? AND version=? AND paid+?<=total-refunded_total RETURNING id',amount,timestamp,sale.id,version,amount),
         log(sale.branch,member,'payment.recorded',sale.id,JSON.stringify({amount,method}),true),
         stmt('INSERT INTO payments (id,order_id,branch,amount,method,reference,actor,created_at) SELECT ?,?,?,?,?,?,?,? WHERE changes()=1',id,sale.id,sale.branch,amount,method,text(body.reference,120),member.user_id,timestamp),
       ]);
@@ -172,7 +191,8 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
       check(!['Voided','Refunded'].includes(sale.status),'This sale cannot change status.');
       const next=STATUSES.indexOf(status),current=STATUSES.indexOf(sale.status);
       check(next===current+1 || isManagerRole(member.role),'Advance one status at a time.');
-      check(status!=='Closed' || sale.paid===sale.total,'Collect the outstanding balance before closing.');
+      check(status!=='Closed' || sale.paid===netTotal(sale),'Collect the outstanding balance before closing.');
+      if(STATUSES.indexOf(status)>=1&&await first("SELECT id FROM work_items WHERE order_id=? AND status<>'Cancelled' LIMIT 1",sale.id))check(sale.job_status==='Completed','Reception must approve finished work before the delivery status can advance.');
       const result=await db().batch([stmt('UPDATE orders SET status=?,version=version+1,updated_at=? WHERE id=? AND version=? RETURNING id',status,now(),sale.id,version),log(sale.branch,member,'sale.status',sale.id,status,true)]);
       check(result[0].results.length,'Sale changed. Refresh and try again.',409);
     } else if(action==='staff') {
@@ -180,16 +200,6 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
       check(person&&canAccess({...person,branches:JSON.parse(person.branches)} as any,sale.branch,[{id:sale.branch}]),'Employee is not assigned to this branch.');
       const result=await db().batch([stmt('UPDATE orders SET staff=?,version=version+1,updated_at=? WHERE id=? AND version=? RETURNING id',staff,now(),sale.id,version),log(sale.branch,member,'sale.staff',sale.id,staff,true)]);
       check(result[0].results.length,'Sale changed. Refresh and try again.',409);
-    } else if(action==='void' || action==='refund') {
-      manager(member); check(!['Voided','Refunded'].includes(sale.status),'This sale was already reversed.');
-      if(action==='refund')check(METHODS.includes(body.method),'Select a valid refund method.');
-      check(action==='refund' || sale.paid===0,'Refund payments before voiding a paid sale.');
-      const reason=text(body.reason,1000); check(reason.length>=3,'Enter a reason.');
-      const result=await db().batch([
-        stmt('UPDATE orders SET status=?,paid=0,version=version+1,updated_at=? WHERE id=? AND version=? RETURNING id',action==='refund'?'Refunded':'Voided',now(),sale.id,version),
-        log(sale.branch,member,`sale.${action}`,sale.id,reason,true),
-        stmt('INSERT INTO payments (id,order_id,branch,amount,method,reference,actor,created_at) SELECT ?,?,?,?,?,?,?,? WHERE changes()=1 AND ?>0',uuid(),sale.id,sale.branch,-sale.paid,text(body.method,40)||'Cash',reason,member.user_id,now(),sale.paid),
-      ]); check(result[0].results.length,'Sale changed. Refresh and try again.',409);
     } else if(action==='method') {
       manager(member); check(METHODS.includes(body.method),'Unknown payment method.');
       check(await first('SELECT id FROM payments WHERE id=? AND order_id=?',text(body.paymentId,100),sale.id),'Payment not found.');
@@ -216,10 +226,13 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
     const available=await branchList();
     check(Array.isArray(branches)&&new Set(branches).size===branches.length&&branches.every(b=>available.some(x=>x.id===b&&x.active===1)),'Invalid branch assignments.'); check(role==='admin'||branches.length>0,'Assign at least one branch.');
     const password=body.password??'';check(typeof password==='string'&&password.length<=256,'Invalid password.'); check(body.id || password.length>=12,'Set an initial password with at least 12 characters.'); check(!password || password.length>=12,'Use a password with at least 12 characters.');
+    const permissions=body.permissions??JSON.parse(existing?.permissions??'{}');
+    check(permissions&&typeof permissions==='object'&&!Array.isArray(permissions)&&Object.keys(permissions).every(k=>['refund','cancel'].includes(k))&&Object.values(permissions).every(v=>typeof v==='boolean'),'Invalid staff permissions.');
     const id=body.id?text(body.id,100):uuid(); check(id!=='owner','The initial owner cannot be changed.'); check(id!==member.id,'You cannot change your own access.');
     if(username)check(!await first('SELECT id FROM members WHERE username=? AND id<>?',username,id),'This username is already in use.',409);
     if(email)check(!await first('SELECT id FROM members WHERE lower(email)=? AND id<>?',email,id),'This email is already in use.',409);
-    await db().batch([stmt('INSERT INTO members (id,user_id,email,username,name,role,branches,active) VALUES (?,NULL,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username,name=excluded.name,role=excluded.role,branches=excluded.branches,active=excluded.active',id,email||`${id}@users.invalid`,username||null,name,role,JSON.stringify(branches),body.active===0?0:1),log('',member,'staff.updated',id,JSON.stringify({username,email,role,branches,active:body.active}))]);
+    const grants=role==='tailor'?{}:permissions;
+    await db().batch([stmt('INSERT INTO members (id,user_id,email,username,name,role,branches,active,permissions) VALUES (?,NULL,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET username=excluded.username,name=excluded.name,role=excluded.role,branches=excluded.branches,active=excluded.active,permissions=excluded.permissions',id,email||`${id}@users.invalid`,username||null,name,role,JSON.stringify(branches),body.active===0?0:1,JSON.stringify(grants)),log('',member,'staff.updated',id,JSON.stringify({username,email,role,branches,active:body.active,permissions:grants}))]);
     if(password)await runtime.setPassword(id,password);
     return {id};
   }

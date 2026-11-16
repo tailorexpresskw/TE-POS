@@ -7,6 +7,7 @@ export const branches = sqliteTable('branches', {
 export const members = sqliteTable('members', {
   id: text('id').primaryKey(), userId: text('user_id').unique(), email: text('email').notNull().unique(),
   username: text('username').unique(),
+  permissions: text('permissions').notNull().default('{}'),
   name: text('name').notNull(), role: text('role').notNull(), branches: text('branches').notNull(), active: integer('active').notNull().default(1),
 });
 export const customers = sqliteTable('customers', {
@@ -22,6 +23,29 @@ export const orders = sqliteTable('orders', {
   dueDate: text('due_date').notNull().default(''), version: integer('version').notNull().default(0), bookingId: text('booking_id'), externalId: text('external_id').unique(),
   tailorId:text('tailor_id').references(()=>members.id), jobStatus:text('job_status').notNull().default('Pending'),
   assignedAt:text('assigned_at').notNull().default(''), jobUpdatedAt:text('job_updated_at').notNull().default(''),
+  parentOrderId:text('parent_order_id'), documentType:text('document_type').notNull().default('invoice'),
+  refundedTotal:integer('refunded_total').notNull().default(0), reason:text('reason').notNull().default(''),
+  reasonCode:text('reason_code').notNull().default(''),
+});
+export const workItems = sqliteTable('work_items', {
+  id:text('id').primaryKey(),orderId:text('order_id').notNull().references(()=>orders.id),
+  lineIndex:integer('line_index').notNull(),quantity:integer('quantity').notNull(),
+  tailorId:text('tailor_id').references(()=>members.id),status:text('status').notNull().default('Pending'),
+  kind:text('kind').notNull().default('original'),parentTaskId:text('parent_task_id'),
+  fault:text('fault').notNull().default(''),faultTailorId:text('fault_tailor_id'),
+  reason:text('reason').notNull().default(''),approvedBy:text('approved_by'),approvedAt:text('approved_at').notNull().default(''),
+  createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),version:integer('version').notNull().default(0),
+});
+export const workCredits = sqliteTable('work_credits', {
+  id:text('id').primaryKey(),taskId:text('task_id').notNull().references(()=>workItems.id),
+  orderId:text('order_id').notNull().references(()=>orders.id),lineIndex:integer('line_index').notNull(),
+  tailorId:text('tailor_id').notNull().references(()=>members.id),quantity:integer('quantity').notNull(),
+  amount:integer('amount').notNull(),reason:text('reason').notNull(),createdAt:text('created_at').notNull(),
+});
+export const integrationEvents = sqliteTable('integration_events', {
+  id:text('id').primaryKey(),orderId:text('order_id').notNull().references(()=>orders.id),
+  branch:text('branch').notNull(),type:text('type').notNull(),payload:text('payload').notNull(),
+  createdAt:text('created_at').notNull(),processedAt:text('processed_at').notNull().default(''),
 });
 export const payments = sqliteTable('payments', {
   id: text('id').primaryKey(), orderId: text('order_id').notNull().references(() => orders.id), branch: text('branch').notNull(),
@@ -46,6 +70,7 @@ export const notifications = sqliteTable('notifications', {
   id:text('id').primaryKey(), memberId:text('member_id').notNull().references(()=>members.id),
   orderId:text('order_id').notNull().references(()=>orders.id), branch:text('branch').notNull(),
   type:text('type').notNull(),title:text('title').notNull(),message:text('message').notNull(),
+  taskId:text('task_id'),
   createdAt:text('created_at').notNull(),readAt:text('read_at').notNull().default(''),
 });
 export const pushSubscriptions = sqliteTable('push_subscriptions', {
