@@ -13,6 +13,8 @@ extension NotificationInbox on AppState {
         });
       }
     } catch (e) {
+      if (e is ApiException && e.code == 'STALE_SESSION') return;
+      if (handleShiftError(e)) return;
       if (e is ApiException && e.status == 401) {
         update(() => authenticated = false);
       }
@@ -172,16 +174,25 @@ extension NotificationInbox on AppState {
               ...notificationItems.map(
                 (item) => ListTile(
                   contentPadding: EdgeInsets.zero,
-                  leading: Icon(switch (item['type']) {
-                    'assigned' => Icons.assignment_ind_outlined,
-                    'completed' => Icons.task_alt,
-                    'review' => Icons.fact_check_outlined,
-                    'backjob' => Icons.replay,
-                    'refund' => Icons.assignment_return_outlined,
-                    'cancellation' || 'work_cancelled' => Icons.cancel_outlined,
-                    'work_changed' => Icons.edit_note,
-                    _ => Icons.pause_circle_outline,
-                  }, color: (item['read_at'] ?? '') == '' ? green : muted),
+                  leading: Icon(
+                    switch (item['type']) {
+                      'assigned' => Icons.assignment_ind_outlined,
+                      'completed' => Icons.task_alt,
+                      'review' => Icons.fact_check_outlined,
+                      'backjob' => Icons.replay,
+                      'refund' => Icons.assignment_return_outlined,
+                      'cancellation' ||
+                      'work_cancelled' => Icons.cancel_outlined,
+                      'work_changed' => Icons.edit_note,
+                      'off_shift' => Icons.security,
+                      _ => Icons.pause_circle_outline,
+                    },
+                    color: (item['read_at'] ?? '') == ''
+                        ? (item['type'] == 'off_shift'
+                              ? Colors.redAccent
+                              : green)
+                        : muted,
+                  ),
                   title: Text(
                     item['title'],
                     style: TextStyle(
@@ -191,7 +202,7 @@ extension NotificationInbox on AppState {
                     ),
                   ),
                   subtitle: Text(
-                    '${item['message']}\n${branchLabel(item['branch'])} · ${displayDate(item['created_at'])}',
+                    '${item['message']}\n${item['type'] == 'off_shift' ? 'Security' : branchLabel(item['branch'])} · ${displayDate(item['created_at'])}',
                   ),
                   isThreeLine: true,
                   onTap: () async {
@@ -203,6 +214,10 @@ extension NotificationInbox on AppState {
                       await refreshNotifications();
                       if (!ctx.mounted) return;
                       Navigator.of(ctx).pop();
+                      if (item['type'] == 'off_shift') {
+                        await showShiftAlerts();
+                        return;
+                      }
                       if (item['type'] == 'work_cancelled') {
                         notice(
                           'This assigned work was cancelled. The notification is retained in your history.',

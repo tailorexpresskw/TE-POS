@@ -25,7 +25,7 @@ test('tracking migration preserves existing users, prices and payment balances',
     assert.equal(app.storage.sqlite.prepare('SELECT count(*) n FROM job_events').get().n,0);
     assert.equal(app.storage.sqlite.prepare("SELECT username FROM members WHERE id='existing'").get().username,null);
     assert.equal(app.storage.sqlite.prepare('SELECT count(*) n FROM notifications').get().n,0);
-    assert.equal(app.storage.sqlite.prepare('SELECT count(*) n FROM _local_migrations').get().n,7);
+    assert.equal(app.storage.sqlite.prepare('SELECT count(*) n FROM _local_migrations').get().n,8);
     assert.equal(app.storage.sqlite.prepare("SELECT active FROM branches WHERE id='aventura'").get().active,0);
     assert.equal(app.storage.sqlite.prepare('SELECT count(*) n FROM branches WHERE active=1').get().n,9);
   }finally{await app.close();}

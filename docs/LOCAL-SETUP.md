@@ -90,3 +90,5 @@ The original 446 catalogue items came from the supplied Excel price list. Deskto
 ## Install as an app, notifications and future mobile builds
 
 See [App installation, notifications and Android/iOS roadmap](APP-AND-NOTIFICATIONS.md). The web app includes an install option in Account and a notification bell. Production device alerts require HTTPS, a running server and permission on each device.
+
+Admin can configure working hours for every non-Admin role. Restrictions start disabled. See [Shift access](SHIFT-ACCESS.md) before enabling schedules; blocked verified attempts alert Admin only.

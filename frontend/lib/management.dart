@@ -60,6 +60,11 @@ extension Management on AppState {
                           icon: const Icon(Icons.sell_outlined, size: 18),
                           label: const Text('Manage catalogue'),
                         ),
+                        OutlinedButton.icon(
+                          onPressed: showShiftAlerts,
+                          icon: const Icon(Icons.security, size: 18),
+                          label: const Text('Off-shift alerts'),
+                        ),
                         rangeButton(),
                       ],
                     ),
@@ -118,9 +123,27 @@ extension Management on AppState {
                         isThreeLine: true,
                         trailing: m['id'] == 'owner'
                             ? badge('Owner')
-                            : IconButton(
-                                onPressed: () => inviteStaff(existing: m),
-                                icon: const Icon(Icons.edit_outlined, size: 18),
+                            : Wrap(
+                                spacing: 0,
+                                children: [
+                                  if (m['role'] != 'admin')
+                                    IconButton(
+                                      tooltip: 'Working hours for ${m['name']}',
+                                      onPressed: () => editWorkingHours(m),
+                                      icon: const Icon(
+                                        Icons.schedule,
+                                        size: 18,
+                                      ),
+                                    ),
+                                  IconButton(
+                                    tooltip: 'Edit staff access',
+                                    onPressed: () => inviteStaff(existing: m),
+                                    icon: const Icon(
+                                      Icons.edit_outlined,
+                                      size: 18,
+                                    ),
+                                  ),
+                                ],
                               ),
                       ),
                     ),

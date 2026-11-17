@@ -7,7 +7,8 @@ typedef Json = Map<String, dynamic>;
 class ApiException implements Exception {
   final String message;
   final int status;
-  ApiException(this.message, this.status);
+  final String? code;
+  ApiException(this.message, this.status, {this.code});
   @override
   String toString() => message;
 }
@@ -44,19 +45,59 @@ String displayDate(dynamic value) {
 }
 
 class Api {
+  static int _sessionEpoch = 0;
+  static int get sessionEpoch => _sessionEpoch;
+  static void Function(String)? onShiftBlocked;
+  static Future<void>? _sessionCleanup;
+  static void queueSessionLogout() {
+    final pending = post(
+      'auth/logout',
+      {},
+    ).then<void>((_) {}).catchError((Object _) {});
+    _sessionCleanup = pending;
+    unawaitedCleanup(pending);
+  }
+
+  static void unawaitedCleanup(Future<void> pending) {
+    pending.whenComplete(() {
+      if (identical(_sessionCleanup, pending)) _sessionCleanup = null;
+    });
+  }
+
+  static void invalidatePendingRequests() => _sessionEpoch++;
   static http.Client client = http.Client();
   static const root = String.fromEnvironment('API_URL');
   static Uri uri(String path) =>
       Uri.parse(root.isEmpty ? Uri.base.origin : root).resolve('/api/$path');
-  static Future<dynamic> get(String path) async =>
-      decode(await client.get(uri(path)));
-  static Future<dynamic> post(String path, Json data) async => decode(
-    await client.post(
-      uri(path),
-      headers: {'Content-Type': 'application/json'},
-      body: jsonEncode(data),
-    ),
-  );
+  static Future<dynamic> get(String path) async {
+    final epoch = _sessionEpoch;
+    return checkedDecode(await client.get(uri(path)), epoch);
+  }
+
+  static Future<dynamic> post(String path, Json data) async {
+    if (path == 'auth/login') await _sessionCleanup;
+    final epoch = _sessionEpoch;
+    return checkedDecode(
+      await client.post(
+        uri(path),
+        headers: {'Content-Type': 'application/json'},
+        body: jsonEncode(data),
+      ),
+      epoch,
+    );
+  }
+
+  static dynamic checkedDecode(http.Response response, int epoch) {
+    if (epoch != _sessionEpoch) {
+      throw ApiException(
+        'This request belongs to an earlier session.',
+        401,
+        code: 'STALE_SESSION',
+      );
+    }
+    return decode(response);
+  }
+
   static dynamic decode(http.Response response) {
     dynamic data;
     try {
@@ -67,9 +108,13 @@ class Api {
       );
     }
     if (response.statusCode >= 400) {
+      if (data is Map && data['code'] == 'SHIFT_BLOCKED') {
+        onShiftBlocked?.call('${data['error']}');
+      }
       throw ApiException(
         data is Map ? data['error'] ?? 'Request failed.' : 'Request failed.',
         response.statusCode,
+        code: data is Map ? data['code']?.toString() : null,
       );
     }
     return data;
@@ -80,16 +125,20 @@ class Api {
     List<int> bytes,
     String type,
     String name,
-  ) async => Map<String, dynamic>.from(
-    decode(
-      await client.post(
-        uri('documents?branch=$branch'),
-        headers: {
-          'Content-Type': type,
-          'X-File-Name': Uri.encodeComponent(name),
-        },
-        body: bytes,
+  ) async {
+    final epoch = _sessionEpoch;
+    return Map<String, dynamic>.from(
+      checkedDecode(
+        await client.post(
+          uri('documents?branch=$branch'),
+          headers: {
+            'Content-Type': type,
+            'X-File-Name': Uri.encodeComponent(name),
+          },
+          body: bytes,
+        ),
+        epoch,
       ),
-    ),
-  );
+    );
+  }
 }

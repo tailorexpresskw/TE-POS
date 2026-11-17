@@ -10,6 +10,8 @@ extension Records on AppState {
       rows.fold<int>(0, (s, r) => s + ((r[key] as num?)?.toInt() ?? 0));
   int netSales(List<Json> rows) =>
       rows.fold<int>(0, (sum, row) => sum + invoiceNet(row));
+  List<String> get reportMethods =>
+      {...methods, ...payments.map((p) => p['method'].toString())}.toList();
   Widget dashboard() {
     if (isMultiBranch) return adminDashboard();
     if (isTailor) return tailorDashboard();
@@ -52,7 +54,7 @@ extension Records on AppState {
       ),
     ];
     final byMethod = <String, int>{
-      for (final m in methods)
+      for (final m in reportMethods)
         m: sum(payments.where((p) => p['method'] == m).toList(), 'amount'),
     };
     return SingleChildScrollView(
@@ -187,56 +189,68 @@ extension Records on AppState {
             style: TextStyle(color: muted, fontSize: 11),
           ),
           const SizedBox(height: 25),
-          SizedBox(
-            height: 220,
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.end,
-              children: values.entries
-                  .map(
-                    (e) => Expanded(
-                      child: Padding(
-                        padding: const EdgeInsets.symmetric(horizontal: 12),
-                        child: Column(
-                          mainAxisAlignment: MainAxisAlignment.end,
-                          children: [
-                            Text(
-                              money(e.value),
-                              style: const TextStyle(
-                                color: muted,
-                                fontSize: 10,
-                              ),
-                            ),
-                            const SizedBox(height: 6),
-                            Container(
-                              height: peak == 0
-                                  ? 1
-                                  : (e.value.abs() / peak * 155)
-                                        .clamp(1, 155)
-                                        .toDouble(),
-                              decoration: BoxDecoration(
-                                color: mint,
-                                borderRadius: BorderRadius.circular(4),
-                              ),
-                            ),
-                            const SizedBox(height: 10),
-                            SizedBox(
-                              height: 28,
-                              child: Text(
-                                e.key,
-                                textAlign: TextAlign.center,
-                                maxLines: 2,
-                                style: const TextStyle(
-                                  color: muted,
-                                  fontSize: 10,
+          LayoutBuilder(
+            builder: (context, box) => SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: SizedBox(
+                width: values.length * 90.0 > box.maxWidth
+                    ? values.length * 90.0
+                    : box.maxWidth,
+                height: 220,
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: values.entries
+                      .map(
+                        (e) => Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(horizontal: 12),
+                            child: Column(
+                              mainAxisAlignment: MainAxisAlignment.end,
+                              children: [
+                                FittedBox(
+                                  fit: BoxFit.scaleDown,
+                                  child: Text(
+                                    money(e.value),
+                                    maxLines: 1,
+                                    style: const TextStyle(
+                                      color: muted,
+                                      fontSize: 10,
+                                    ),
+                                  ),
                                 ),
-                              ),
+                                const SizedBox(height: 6),
+                                Container(
+                                  height: peak == 0
+                                      ? 1
+                                      : (e.value.abs() / peak * 155)
+                                            .clamp(1, 155)
+                                            .toDouble(),
+                                  decoration: BoxDecoration(
+                                    color: mint,
+                                    borderRadius: BorderRadius.circular(4),
+                                  ),
+                                ),
+                                const SizedBox(height: 10),
+                                SizedBox(
+                                  height: 28,
+                                  child: Text(
+                                    e.key,
+                                    textAlign: TextAlign.center,
+                                    maxLines: 2,
+                                    style: const TextStyle(
+                                      color: muted,
+                                      fontSize: 10,
+                                    ),
+                                  ),
+                                ),
+                              ],
                             ),
-                          ],
+                          ),
                         ),
-                      ),
-                    ),
-                  )
-                  .toList(),
+                      )
+                      .toList(),
+                ),
+              ),
             ),
           ),
         ],
@@ -1161,7 +1175,7 @@ extension Records on AppState {
         ),
         const SizedBox(height: 20),
         chart('Payments by Method', {
-          for (final m in methods)
+          for (final m in reportMethods)
             m: sum(payments.where((p) => p['method'] == m).toList(), 'amount'),
         }),
         const SizedBox(height: 20),

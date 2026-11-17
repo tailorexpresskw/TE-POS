@@ -2,7 +2,7 @@ import {createHash} from 'node:crypto';
 import {check,text,canonicalRole} from './domain.ts';
 import type {Database,Row,Statement} from './storage.ts';
 
-export function createNotifications(db:Database,publicKey='') {
+export function createNotifications(db:Database,publicKey='',security?:{inbox:(member:Row)=>{items:Row[];unread:number};mark:(member:Row,id:string)=>Row}) {
   const stmt=(sql:string,...args:any[])=>db.prepare(sql).bind(...args);
   function visible(member:Row) {
     const args:any[]=[member.id];
@@ -38,7 +38,8 @@ export function createNotifications(db:Database,publicKey='') {
     const scope=visible(member),join=' FROM notifications n JOIN orders o ON o.id=n.order_id WHERE '+scope.sql;
     const items=(await stmt('SELECT n.*,o.bill'+join+' ORDER BY n.created_at DESC,n.id DESC LIMIT 100',...scope.args).all()).results;
     const counts=await stmt("SELECT COUNT(*) count"+join+" AND n.read_at=''",...scope.args).first();
-    return {items,unread:counts?.count??0};
+    const alerts=security?.inbox(member)??{items:[],unread:0};
+    return {items:[...items,...alerts.items].sort((a,b)=>b.created_at.localeCompare(a.created_at)).slice(0,100),unread:(counts?.count??0)+alerts.unread};
   }
   async function write(member:Row,path:string[],body:Row) {
     if(path[1]==='subscriptions') {
@@ -46,7 +47,7 @@ export function createNotifications(db:Database,publicKey='') {
       const endpoint=text(body.endpoint??body.subscription?.endpoint,4096);
       const id=createHash('sha256').update(endpoint).digest('hex');
       if(action==='unsubscribe') {
-        await db.batch([stmt('DELETE FROM push_deliveries WHERE subscription_id IN (SELECT id FROM push_subscriptions WHERE id=? AND member_id=?)',id,member.id),stmt('DELETE FROM push_subscriptions WHERE id=? AND member_id=?',id,member.id)]);
+        await db.batch([stmt('DELETE FROM push_deliveries WHERE subscription_id IN (SELECT id FROM push_subscriptions WHERE id=? AND member_id=?)',id,member.id),stmt('DELETE FROM security_push_deliveries WHERE subscription_id IN (SELECT id FROM push_subscriptions WHERE id=? AND member_id=?)',id,member.id),stmt('DELETE FROM push_subscriptions WHERE id=? AND member_id=?',id,member.id)]);
         return {ok:true};
       }
       check(action==='subscribe'&&publicKey,'Push notifications are not configured.',503);
@@ -61,13 +62,15 @@ export function createNotifications(db:Database,publicKey='') {
       // A browser device belongs to its currently signed-in user. Clear delivery state on a rebind.
       const previous=await stmt('SELECT member_id FROM push_subscriptions WHERE id=?',id).first();
       await db.batch([
-        ...(previous&&previous.member_id!==member.id?[stmt('DELETE FROM push_deliveries WHERE subscription_id=?',id)]:[]),
+        ...(previous&&previous.member_id!==member.id?[stmt('DELETE FROM push_deliveries WHERE subscription_id=?',id),stmt('DELETE FROM security_push_deliveries WHERE subscription_id=?',id)]:[]),
         stmt('INSERT INTO push_subscriptions(id,member_id,subscription,created_at) VALUES (?,?,?,?) ON CONFLICT(id) DO UPDATE SET created_at=CASE WHEN member_id<>excluded.member_id THEN excluded.created_at ELSE created_at END,member_id=excluded.member_id,subscription=excluded.subscription',id,member.id,subscription,new Date().toISOString()),
       ]);
       return {ok:true};
     }
     check(!path[1]&&body.action==='read','Invalid notification action.');
     const scope=visible(member),id=text(body.id,300);
+    if(id.startsWith('security:')){check(security,'Security alerts are unavailable.',404);return security.mark(member,id);}
+    if(id==='all'&&member.role==='admin')security?.mark(member,id);
     if(id!=='all') {scope.sql+=' AND n.id=?';scope.args.push(id);}
     await stmt("UPDATE notifications SET read_at=? WHERE read_at='' AND id IN (SELECT n.id FROM notifications n JOIN orders o ON o.id=n.order_id WHERE "+scope.sql+')',new Date().toISOString(),...scope.args).run();
     return {ok:true};

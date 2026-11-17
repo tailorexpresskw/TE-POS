@@ -83,3 +83,25 @@ export const pushDeliveries = sqliteTable('push_deliveries', {
   attempts:integer('attempts').notNull().default(0),nextAttempt:text('next_attempt').notNull().default(''),
   sentAt:text('sent_at').notNull().default(''),
 });
+export const staffShiftPolicies = sqliteTable('staff_shift_policies', {
+  memberId:text('member_id').primaryKey().references(()=>members.id),
+  enabled:integer('enabled').notNull().default(0),weekly:text('weekly').notNull().default('[]'),
+  exceptions:text('exceptions').notNull().default('[]'),revision:integer('revision').notNull().default(0),
+  updatedBy:text('updated_by').notNull(),updatedAt:text('updated_at').notNull(),
+});
+export const securityAlerts = sqliteTable('security_alerts', {
+  id:text('id').primaryKey(),memberId:text('member_id').notNull().references(()=>members.id),
+  staffName:text('staff_name').notNull(),username:text('username').notNull(),
+  source:text('source').notNull(),reason:text('reason').notNull(),attemptedBranch:text('attempted_branch').notNull().default(''),
+  firstAt:text('first_at').notNull(),lastAt:text('last_at').notNull(),attempts:integer('attempts').notNull().default(1),
+  path:text('path').notNull().default(''),userAgent:text('user_agent').notNull().default(''),
+});
+export const securityAlertReceipts = sqliteTable('security_alert_receipts', {
+  id:text('id').primaryKey(),alertId:text('alert_id').notNull().references(()=>securityAlerts.id),
+  memberId:text('member_id').notNull().references(()=>members.id),readAt:text('read_at').notNull(),
+});
+export const securityPushDeliveries = sqliteTable('security_push_deliveries', {
+  id:text('id').primaryKey(),alertId:text('alert_id').notNull().references(()=>securityAlerts.id),
+  subscriptionId:text('subscription_id').notNull().references(()=>pushSubscriptions.id),
+  attempts:integer('attempts').notNull().default(0),nextAttempt:text('next_attempt').notNull().default(''),sentAt:text('sent_at').notNull().default(''),
+});

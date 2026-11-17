@@ -6,7 +6,8 @@ import {createNotifications} from './notifications.ts';
 import {createAdjustments} from './adjustments.ts';
 import type {Database, DocumentStore, Row} from './storage.ts';
 
-export function createService(runtime: {database: Database; bucket: DocumentStore; authenticate: (request:Request)=>Promise<{userId:string}|null>; setPassword:(id:string,password:string)=>Promise<void>;pushPublicKey?:string}) {
+type ShiftControls={branch:(member:Row,branch:string,request?:Request)=>void;read:(member:Row,id:string)=>Row;write:(member:Row,id:string,body:Row)=>Row;alerts:(member:Row,url:URL)=>Row;inbox:(member:Row)=>{items:Row[];unread:number};mark:(member:Row,id:string)=>Row};
+export function createService(runtime: {database: Database; bucket: DocumentStore; authenticate: (request:Request)=>Promise<{userId:string;shiftAccess?:Row}|null>; setPassword:(id:string,password:string)=>Promise<void>;pushPublicKey?:string;shifts?:ShiftControls}) {
 const now=()=>new Date().toISOString();
 const uuid=()=>crypto.randomUUID();
 const db=()=>runtime.database;
@@ -16,7 +17,8 @@ async function first(sql:string,...args:any[]):Promise<Row|null> {return stmt(sq
 function log(branch:string, actor:Row, action:string, entity:string, detail='',whenChanged=false) {
   return stmt('INSERT INTO audit (id,branch,actor,action,entity,detail,created_at) SELECT ?,?,?,?,?,?,?'+(whenChanged?' WHERE changes()=1':''),uuid(),branch,actor.user_id,action,entity,detail,now());
 }
-const notifications=createNotifications(runtime.database,runtime.pushPublicKey);
+const notifications=createNotifications(runtime.database,runtime.pushPublicKey,runtime.shifts);
+const requestContexts=new WeakMap<Row,Request>();
 const branchList=()=>all('SELECT * FROM branches ORDER BY name COLLATE NOCASE');
 const workflow={all,first,stmt,db,log,notifications,branchList,branchAccess};
 const tracking=createTracking(workflow),adjustments=createAdjustments(workflow);
@@ -27,9 +29,13 @@ async function identity(request:Request) {
   member.role=canonicalRole(member.role);check(ROLES.includes(member.role),'Your role is not configured. Ask an administrator.',403);
   member.permissions=JSON.parse(member.permissions??'{}');
   const available=await branchList();
-  member.branches=JSON.parse(member.branches).filter((id:string)=>available.some(b=>b.id===id&&b.active===1)); return member;
+  member.assigned_branches=JSON.parse(member.branches);
+  member.shift_access=user.shiftAccess;
+  member.branches=member.assigned_branches.filter((id:string)=>available.some(b=>b.id===id&&b.active===1)&&(!user.shiftAccess?.enabled||user.shiftAccess.allowedBranches.includes(id)));
+  requestContexts.set(member,request);return member;
 }
 async function branchAccess(member:Row,branch:string,historical=false) {
+  if(member.shift_access?.enabled&&member.assigned_branches?.includes(branch))runtime.shifts?.branch({...member,branches:member.assigned_branches},branch,requestContexts.get(member));
   const record=await first('SELECT * FROM branches WHERE id=?',branch);
   check(record&&canAccess(member as any,branch,[record])&&(record.active===1||(historical&&member.role==='admin')),'You do not have access to this branch.',403);
   return record;
@@ -50,6 +56,7 @@ function dateRange(url:URL) {
   return [new Date(from+'T00:00:00+03:00').toISOString(),new Date(to+'T23:59:59.999+03:00').toISOString()];
 }
 async function read(member:Row,path:string[],url:URL):Promise<any> {
+  if(path[0]==='shifts'){admin(member);check(runtime.shifts,'Shift controls are not configured.',503);return path[1]==='alerts'?runtime.shifts.alerts(member,url):runtime.shifts.read(member,text(path[1],100));}
   if(path[0]==='notifications')return notifications.read(member,path);
   if(path[0]==='boot') {
     const available=(await branchList()).filter(b=>b.active===1);
@@ -76,7 +83,7 @@ async function read(member:Row,path:string[],url:URL):Promise<any> {
   if(path[0]==='data') {
     const branch=text(url.searchParams.get('branch'),100); await branchAccess(member,branch,true);
     const [start,end]=dateRange(url);
-    const sales=await all("SELECT o.*,m.name tailor_name,m.active tailor_active FROM orders o LEFT JOIN members m ON m.id=o.tailor_id WHERE o.branch=? AND ((o.created_at BETWEEN ? AND ?) OR o.kind IN ('held','quotation')) ORDER BY o.created_at DESC LIMIT 1000",branch,start,end);
+    const sales=await all("SELECT o.*,m.name tailor_name,m.active tailor_active FROM orders o LEFT JOIN members m ON m.id=o.tailor_id WHERE o.branch=? AND ((o.created_at BETWEEN ? AND ?) OR o.kind IN ('held','quotation')) ORDER BY o.created_at DESC LIMIT 5000",branch,start,end);
     return {orders:sales.map(decode),payments:await all('SELECT * FROM payments WHERE branch=? AND created_at BETWEEN ? AND ? ORDER BY created_at DESC LIMIT 5000',branch,start,end),expenses:await all('SELECT * FROM expenses WHERE branch=? AND created_at BETWEEN ? AND ? ORDER BY created_at DESC LIMIT 1000',branch,start,end)};
   }
   if(path[0]==='orders' && path[1]) {
@@ -100,6 +107,7 @@ async function read(member:Row,path:string[],url:URL):Promise<any> {
   check(false,'Endpoint not found.',404);
 }
 async function write(member:Row,path:string[],body:Row):Promise<any> {
+  if(path[0]==='shifts'){admin(member);check(runtime.shifts,'Shift controls are not configured.',503);if(path[1]==='alerts'){check(body.action==='read','Invalid alert action.');return runtime.shifts.mark(member,text(body.id??'all',100));}return runtime.shifts.write(member,text(path[1],100),body);}
   if(path[0]==='notifications')return notifications.write(member,path,body);
   if(path[0]==='tracking'&&path[1])return tracking.progress(member,path[1],body);
   tracking.office(member);
@@ -257,7 +265,7 @@ async function api(request:Request,path:string[]) {
     const conflict=String(error.message).includes('UNIQUE constraint failed');
     const status=error.status??(error instanceof SyntaxError?400:conflict?409:500);
     if(status===500) console.error('POS request failed',error.message);
-    return Response.json({error:status===500?'The request could not be saved. Refresh and try again.':conflict?'This record was already saved or changed. Refresh and try again.':error.message},{status,headers:{'Cache-Control':'no-store'}});
+    return Response.json({error:status===500?'The request could not be saved. Refresh and try again.':conflict?'This record was already saved or changed. Refresh and try again.':error.message,...(error.code==='SHIFT_BLOCKED'?{code:error.code}:{})},{status,headers:{'Cache-Control':'no-store'}});
   }
 }
 async function document(request:Request,id:string) {
@@ -280,7 +288,7 @@ async function document(request:Request,id:string) {
     await runtime.bucket.put(key,bytes);
     try {await stmt('INSERT INTO attachments (id,branch,order_id,name,type,object_key,created_at) VALUES (?,?,NULL,?,?,?,?)',docId,branch,name,type,key,now()).run();} catch(e) {await runtime.bucket.delete(key);throw e;}
     return Response.json({id:docId,name,type});
-  } catch(e:any) {return Response.json({error:e.status?e.message:'Document operation failed.'},{status:e.status??500});}
+  } catch(e:any) {return Response.json({error:e.status?e.message:'Document operation failed.',...(e.code==='SHIFT_BLOCKED'?{code:e.code}:{})},{status:e.status??500});}
 }
 
 return {api,document};

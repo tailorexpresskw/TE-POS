@@ -13,6 +13,7 @@ extension Account on AppState {
       });
       if (authenticated) await loadBoot();
     } catch (e) {
+      if (handleShiftError(e)) return;
       update(() {
         authChecked = true;
         loading = false;
@@ -30,10 +31,16 @@ extension Account on AppState {
       return;
     }
     await run(() async {
-      await disableDeviceNotifications();
+      try {
+        await disableDeviceNotifications();
+      } on ApiException catch (e) {
+        if (e.code != 'SHIFT_BLOCKED' && e.status != 401) rethrow;
+      }
+      Api.invalidatePendingRequests();
       await Api.post('auth/logout', {});
       update(() {
         authenticated = false;
+        busy = false;
         clearCart();
         boot = null;
         branch = null;
@@ -49,6 +56,10 @@ extension Account on AppState {
         notificationItems = [];
         unreadNotifications = 0;
         screen = 0;
+        suspendedShiftDraft = null;
+        shiftEndTimer?.cancel();
+        shiftWarningTimer?.cancel();
+        shiftWindowKey = null;
       });
     });
   }

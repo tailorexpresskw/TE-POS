@@ -10,6 +10,10 @@ The POS can be installed as a web app and includes a staff notification inbox an
 
 Service-level assignments, reception checks, backjobs, work credit and linked refund/cancellation/charge invoices are described in [Service workflows](docs/SERVICE-WORKFLOWS.md). Admin must grant refund and cancellation permissions to staff.
 
+Admin can enable weekly working hours, dated days off and temporary exceptions for every non-Admin role. The server blocks off-shift access and alerts Admin only. See [Shift access](docs/SHIFT-ACCESS.md) for rollout and limitations.
+
+The local [legacy sales importer](docs/SALES-IMPORT.md) previews and imports detailed Excel exports with backups, duplicate prevention and reconciliation reports. Imported customer data stays outside Git and release packages.
+
 The project folders are:
 
 - `frontend/lib/` ? Flutter screens and workflows; `frontend/web/` contains browser assets.

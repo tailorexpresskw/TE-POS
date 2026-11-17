@@ -32,6 +32,8 @@ The service worker caches only the offline connection screen and a public icon. 
 
 ## Adding features and later native apps
 
+Off-shift security alerts are delivered only to Admin accounts. Working hours, automatic locks, exceptions and alert analysis are described in [Shift access](SHIFT-ACCESS.md). Normal automatic shift-end locks do not raise misuse alerts.
+
 Keep new business rules and notification types in `lib/`, new Flutter screens in `frontend/lib/`, and persistent changes in `db/schema.ts` plus an additive Drizzle migration. Keep API permissions and tests with each feature. New staff roles, reports, integrations and workflows can be added without replacing the web app.
 
 The same Flutter screens and JSON APIs form the base for future Android and iOS apps. Native store builds are a later implementation stage, including:

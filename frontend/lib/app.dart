@@ -16,6 +16,7 @@ part 'login.dart';
 part 'workflow.dart';
 part 'notifications.dart';
 part 'operations.dart';
+part 'shifts.dart';
 
 const mint = Color(0xffabdabb),
     green = Color(0xff22bf74),
@@ -119,6 +120,10 @@ class AppState extends State<PosApp> {
   int unreadNotifications = 0;
   bool notificationDialogOpen = false;
   Timer? notificationTimer;
+  Timer? shiftEndTimer, shiftWarningTimer;
+  String? shiftWindowKey;
+  bool checkingShift = false;
+  Json? suspendedShiftDraft;
   String trackingBranch = 'all',
       jobFilter = 'All',
       jobSearch = '',
@@ -206,22 +211,28 @@ class AppState extends State<PosApp> {
 
   Future<void> run(Future<void> Function() fn) async {
     if (busy) return;
+    final epoch = Api.sessionEpoch;
     update(() => busy = true);
     try {
       await fn();
     } catch (e) {
+      if (e is ApiException && e.code == 'STALE_SESSION') return;
+      if (handleShiftError(e)) return;
       if (e is ApiException && e.status == 401) {
         update(() => authenticated = false);
       }
       notice(e, error: true);
     } finally {
-      update(() => busy = false);
+      if (epoch == Api.sessionEpoch) update(() => busy = false);
     }
   }
 
   @override
   void initState() {
     super.initState();
+    Api.onShiftBlocked = (message) {
+      if (mounted && authenticated) lockForShift(message);
+    };
     checkSession();
     var notificationTicks = 0;
     notificationTimer = Timer.periodic(const Duration(seconds: 2), (_) {
@@ -229,11 +240,20 @@ class AppState extends State<PosApp> {
       if (!notificationDialogOpen && browser.consumeNotificationOpen()) {
         openNotifications();
       }
-      if (++notificationTicks % 8 == 0 && !busy) refreshNotifications();
+      if (++notificationTicks % 8 == 0 && !busy) {
+        unawaited(() async {
+          await refreshShiftAccess();
+          if (authenticated) await refreshNotifications();
+        }());
+      }
     });
     timer = Timer.periodic(const Duration(seconds: 60), (_) {
       if (authenticated && branch != null && !busy) {
         loadData().catchError((Object e) {
+          if (handleShiftError(e) ||
+              (e is ApiException && e.code == 'STALE_SESSION')) {
+            return;
+          }
           notice(
             'Connection interrupted. Your cart is still open.',
             error: true,
@@ -245,8 +265,11 @@ class AppState extends State<PosApp> {
 
   @override
   void dispose() {
+    Api.onShiftBlocked = null;
     timer?.cancel();
     notificationTimer?.cancel();
+    shiftEndTimer?.cancel();
+    shiftWarningTimer?.cancel();
     super.dispose();
   }
 
@@ -285,6 +308,11 @@ class AppState extends State<PosApp> {
           jobOffset = 0;
         }
       });
+      configureShiftLock(
+        member['shift_access'] is Map
+            ? Json.from(member['shift_access'])
+            : null,
+      );
       unawaited(refreshNotifications());
       unawaited(bindDeviceNotifications());
       update(() => loading = false);
@@ -298,6 +326,10 @@ class AppState extends State<PosApp> {
         await loadData();
       }
     } catch (e) {
+      if (handleShiftError(e) ||
+          (e is ApiException && e.code == 'STALE_SESSION')) {
+        return;
+      }
       update(() => failure = e.toString().replaceFirst('Exception: ', ''));
     } finally {
       update(() => loading = false);
@@ -443,6 +475,7 @@ class AppState extends State<PosApp> {
       update(() {
         branch = chosen;
         clearCart();
+        restoreShiftDraft();
       });
       await loadData();
     }
@@ -984,6 +1017,8 @@ Widget modalHeader(String title, BuildContext ctx, {bool close = true}) =>
           Expanded(
             child: Text(
               title,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
               style: const TextStyle(
                 color: Colors.white,
                 fontWeight: FontWeight.bold,

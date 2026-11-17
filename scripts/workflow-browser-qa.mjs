@@ -17,6 +17,10 @@ await post('members',{name:'QA Manager',username:'qa.manager',role:'manager',bra
 await post('members',{name:'QA Supervisor',username:'qa.supervisor',role:'supervisor',branches:['zahra','avenues'],password});
 const tailor=await post('members',{name:'QA Tailor',email:'tailor@qa.test',role:'tailor',branches:['zahra'],password});
 const fixingTailor=await post('members',{name:'QA Fixing Tailor',username:'qa.fixer',role:'tailor',branches:['zahra'],password});
+const offShiftStaff=await post('members',{name:'QA Off-shift Reception',username:'qa.offshift',role:'reception',branches:['zahra'],password});
+await post('shifts/'+offShiftStaff.id,{enabled:true,weekly:[],exceptions:[],revision:0});
+const denied=await fetch(base+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username:'qa.offshift',password})});
+assert.equal(denied.status,403);assert.equal((await denied.json()).code,'SHIFT_BLOCKED');
 await post('members',{name:'Other Branch Tailor',email:'other@qa.test',role:'tailor',branches:['avenues'],password});
 const customer=await post('customers',{name:'QA Customer',phone:'55551234',address:'Kuwait City'});
 const mainInvoice=await post('orders',{id:randomUUID(),branch:'zahra',kind:'sale',customerId:customer.id,tailorId:tailor.id,lines:[{id:'1001',qty:1,price:2000,note:'Hem to 90 cm'}],payments:[],dueDate:'2026-11-03',notes:'QA garment instructions'});
@@ -76,10 +80,21 @@ try{
   // Widget tests exercise both fields and form submission; seed this browser fixture through the API.
   await post('branches',{name:'QA New Branch',code:'NB'});await account('admin');await click('Manage users');await wait(has('QA New Branch'));
   const adminBranches=await evaluate("fetch('/api/boot').then(r=>r.json()).then(b=>b.branches)");assert.ok(adminBranches.some(b=>b.name==='QA New Branch'));assert.ok(!adminBranches.some(b=>b.id==='aventura'));await screenshot('admin-branches');
+  await click('Off-shift alerts');await wait(has('Scheduled day off')+'||'+has('Outside scheduled shift'));await screenshot('admin-shift-alerts');
+  await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await sleep(400);await screenshot('admin-shift-alerts-phone');await click('Close');
+  await send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
+  await click('Working hours for QA Off-shift Reception');await wait(has('Save working hours'));await screenshot('admin-working-hours');
+  await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await sleep(400);await screenshot('admin-working-hours-phone');
+  await click('Add weekly period');await wait(has('Use shift period'));await screenshot('admin-shift-period-phone');await click('Use shift period');
+  await click('Add dated exception');await wait(has('Use dated exception'));await screenshot('admin-shift-exception-phone');await click('Use dated exception');
+  await click('Save working hours');await wait(has('Working hours saved.'));
+  const savedSchedule=await get('shifts/'+offShiftStaff.id);assert.equal(savedSchedule.policy.weekly.length,1);assert.equal(savedSchedule.policy.exceptions.length,1);
+  await send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
 
   await account('manager');assert.equal(await evaluate(has('Administration')),false);await screenshot('manager-dashboard');
   await account('supervisor');assert.equal(await evaluate(has('Administration')),false);assert.equal(await evaluate(has('Manage users')),false);await wait(has('Assigned branches'));await screenshot('supervisor-dashboard');
   const supervised=await evaluate("fetch('/api/boot').then(r=>r.json()).then(b=>b.branches.map(b=>b.id))");assert.deepEqual(supervised.sort(),['avenues','zahra']);
+  assert.equal(await evaluate("fetch('/api/notifications').then(r=>r.json()).then(d=>d.items.some(n=>n.type==='off_shift'))"),false);
   await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await sleep(500);await screenshot('supervisor-dashboard-phone');
   await send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   await account('reception');await screenshot('reception-dashboard');await click('POS');await wait(has('Hem- Skirt'));await screenshot('reception-pos');await click('Walk-in customer');await fill('Find customer','55551234');await click('QA Customer');await wait(has('Last bill date'));await screenshot('customer-details');await click('Select customer');await click('Hem- Skirt');assert.equal(await evaluate(has('Service notes / measurements')),false);await evaluate("[...document.querySelectorAll('[role=button]')].filter(e=>(e.getAttribute('aria-label')||e.textContent||'').trim().split(String.fromCharCode(10))[0].trim()==='Hem- Skirt').at(-1).click()");await wait(has('Service notes / measurements'));await screenshot('service-notes');await click('Cancel');await click('Dashboard');await click('Tracking');await wait(has('Tailor Tracking & Assignment'));await screenshot('reception-tracking');

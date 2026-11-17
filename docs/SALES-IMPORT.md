@@ -1,0 +1,19 @@
+# Legacy sales for local testing
+
+Run `python scripts/import-sales.py "path/to/detail.xlsx" "path/to/summary.xlsx" "path/to/analytics.xlsx"` to preview. Add `--apply` to import into the existing `data/pos.sqlite`. Python 3 is required; there are no third-party Python dependencies. `--database path/to/test/pos.sqlite` targets another initialized POS database. The importer is a local maintenance command; no public upload endpoint is added.
+
+Every applied import creates a SQLite backup in private `data/backups/` and copies its source workbooks and reconciliation report to `data/imports/<batch>/`. Those folders are excluded from Git and release packages. Do not commit customer spreadsheets. The standalone ZIP deliberately contains no imported customers, sales or source workbooks; local imported data does not automatically appear on Render.
+
+The import is transactional and uses stable external invoice identifiers. Rerunning the same exports skips existing imported invoices rather than updating them. Existing orders, customers, staff accounts, permissions and schedules are preserved. Source totals use integer fils; Excel timestamps are interpreted as Kuwait local time. Named branch aliases map Dasman City Center to Dasma, West Mishrif to Mishref and Promenade to Promenade Mall. No branch is created or reactivated.
+
+Detailed June rows are grouped by original invoice ID. Numeric legacy bill numbers receive a `LEGACY-<branch>-` prefix to distinguish branch-specific bill sequences; the original identifiers remain in the notes. October invoice numbers are preserved. Aggregated analytics without invoice IDs are retained as reference only, never imported as duplicate sales. Unallocated report extras without a branch, invoice or meaningful transaction date remain in the reconciliation report.
+
+The source files do not establish garment fulfilment, tailor assignment, acceptance, fault or work credit. Imported invoices start Ongoing with Pending, unassigned service tasks so the local assignment/reception workflow can be tried. Source employee names are retained as text only; no staff logins or credited work are invented. A legacy Backjob service label does not establish a verified backjob relationship or blame.
+
+All provided invoice exports mark their sales Paid. June does not provide payment methods, so its receipts are labeled `Legacy paid / method unknown`. October payment names such as K-NET and LINK are preserved. Payment charts include methods found in the imported records without adding them as new checkout choices. Receipt timestamps are not supplied; imported receipts use invoice timestamps for local testing and say so in their references/notes.
+
+Where printed totals, discounts and payment breakdowns disagree, the printed invoice net total and Paid status are preserved. Effective discount/extra reconciles the service sum to that net; affected invoices carry a SOURCE RECONCILIATION note. A contradictory payment breakdown is retained in the private report and replaced by an unknown-method receipt for the printed net, rather than overstating known cash/card receipts. This data is for workflow testing; source discrepancies need review before accounting use.
+
+Choose the imported dates in the POS calendar: June 1–30, 2026 or October 1–3, 2026. Admin sees the branch summary; selecting a branch opens its invoices and reports. Historical dates are preserved, so these invoices do not appear in today's sales. The branch data endpoint supports up to 5,000 orders for a range, enough for the supplied monthly exports; use narrower ranges for larger datasets.
+
+Verify the importer with `python scripts/import-sales.test.py`. The tests cover currency/time conversion, continued invoice pages, unknown methods, duplicate prevention and rollback without creating accounts, notifications or integration events.
