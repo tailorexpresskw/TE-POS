@@ -912,6 +912,24 @@ extension Records on AppState {
               ),
               const SizedBox(height: 20),
               if (o['kind'] == 'sale' &&
+                  ((o['document_type'] ?? 'invoice') == 'invoice' ||
+                      o['charge_kind'] == 'delivery'))
+                OutlinedButton.icon(
+                  onPressed: () async {
+                    Navigator.pop(dialogContext);
+                    await customerDelivery(
+                      o,
+                      openEditor: o['charge_kind'] == 'delivery',
+                    );
+                  },
+                  icon: const Icon(Icons.home_outlined, size: 17),
+                  label: Text(
+                    o['charge_kind'] == 'delivery'
+                        ? 'Send delivery request'
+                        : 'Customer home delivery',
+                  ),
+                ),
+              if (o['kind'] == 'sale' &&
                   (o['document_type'] ?? 'invoice') == 'invoice' &&
                   !['Voided', 'Refunded'].contains(o['status'])) ...[
                 OutlinedButton.icon(

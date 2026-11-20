@@ -6,7 +6,7 @@ export function createNotifications(db:Database,publicKey='',security?:{inbox:(m
   const stmt=(sql:string,...args:any[])=>db.prepare(sql).bind(...args);
   function visible(member:Row) {
     const args:any[]=[member.id];
-    let sql="n.member_id=? AND (n.type IN ('refund','cancellation','work_cancelled') OR o.status NOT IN ('Voided','Refunded')) AND EXISTS (SELECT 1 FROM branches b WHERE b.id=n.branch AND b.active=1)";
+    let sql="n.member_id=? AND (n.type IN ('refund','cancellation','work_cancelled','delivery') OR o.status NOT IN ('Voided','Refunded')) AND EXISTS (SELECT 1 FROM branches b WHERE b.id=n.branch AND b.active=1)";
     if(member.role!=='admin') {
       if(!member.branches.length)sql+=' AND 0';
       else {sql+=` AND n.branch IN (${member.branches.map(()=>'?').join(',')})`;args.push(...member.branches);}

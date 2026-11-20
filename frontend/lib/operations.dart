@@ -338,6 +338,13 @@ extension ServiceOperations on AppState {
         'Add delivery / extra charge',
         [
           const Field(
+            'chargeKind',
+            'Charge type',
+            options: ['Delivery', 'Other extra charge'],
+            initial: 'Delivery',
+            required: true,
+          ),
+          const Field(
             'name',
             'Description',
             initial: 'Delivery fee',
@@ -363,6 +370,9 @@ extension ServiceOperations on AppState {
             'Creates a separate numbered sub-invoice linked to this invoice. Record payments already received.',
       );
       if (values != null) {
+        values['chargeKind'] = values['chargeKind'] == 'Delivery'
+            ? 'delivery'
+            : 'extra';
         try {
           values['amount'] = parseMoney(values['amount']);
           values['paid'] = parseMoney(values['paid']);

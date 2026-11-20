@@ -26,6 +26,7 @@ export const orders = sqliteTable('orders', {
   parentOrderId:text('parent_order_id'), documentType:text('document_type').notNull().default('invoice'),
   refundedTotal:integer('refunded_total').notNull().default(0), reason:text('reason').notNull().default(''),
   reasonCode:text('reason_code').notNull().default(''),
+  chargeKind:text('charge_kind').notNull().default(''),
 });
 export const workItems = sqliteTable('work_items', {
   id:text('id').primaryKey(),orderId:text('order_id').notNull().references(()=>orders.id),
@@ -104,4 +105,22 @@ export const securityPushDeliveries = sqliteTable('security_push_deliveries', {
   id:text('id').primaryKey(),alertId:text('alert_id').notNull().references(()=>securityAlerts.id),
   subscriptionId:text('subscription_id').notNull().references(()=>pushSubscriptions.id),
   attempts:integer('attempts').notNull().default(0),nextAttempt:text('next_attempt').notNull().default(''),sentAt:text('sent_at').notNull().default(''),
+});
+export const inventoryBranchMappings = sqliteTable('inventory_branch_mappings', {
+  branch:text('branch').primaryKey().references(()=>branches.id),
+  inventoryBranchId:text('inventory_branch_id').notNull().unique(),
+  updatedAt:text('updated_at').notNull(),updatedBy:text('updated_by').notNull(),
+});
+export const customerDeliveries = sqliteTable('customer_deliveries', {
+  id:text('id').primaryKey(),orderId:text('order_id').notNull().unique().references(()=>orders.id),
+  branch:text('branch').notNull().references(()=>branches.id),payload:text('payload').notNull(),
+  desiredStatus:text('desired_status').notNull().default('new'),revision:integer('revision').notNull().default(0),
+  remoteId:text('remote_id').notNull().default(''),remoteStatus:text('remote_status').notNull().default(''),
+  syncState:text('sync_state').notNull().default('pending'),attempts:integer('attempts').notNull().default(0),
+  nextAttempt:text('next_attempt').notNull().default(''),lastError:text('last_error').notNull().default(''),
+  driverName:text('driver_name').notNull().default(''),etaLabel:text('eta_label').notNull().default(''),
+  etaAt:text('eta_at').notNull().default(''),deliveredAt:text('delivered_at').notNull().default(''),
+  createdAt:text('created_at').notNull(),updatedAt:text('updated_at').notNull(),createdBy:text('created_by').notNull(),
+  deliveryInvoiceId:text('delivery_invoice_id').references(()=>orders.id),
+  approvedAt:text('approved_at').notNull().default(''),approvedBy:text('approved_by'),
 });

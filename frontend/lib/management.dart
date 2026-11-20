@@ -65,6 +65,11 @@ extension Management on AppState {
                           icon: const Icon(Icons.security, size: 18),
                           label: const Text('Off-shift alerts'),
                         ),
+                        OutlinedButton.icon(
+                          onPressed: inventoryConnection,
+                          icon: const Icon(Icons.link, size: 18),
+                          label: const Text('Inventory delivery connection'),
+                        ),
                         rangeButton(),
                       ],
                     ),

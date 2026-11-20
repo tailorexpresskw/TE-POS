@@ -43,7 +43,7 @@ export function createPush(sqlite,directory,{enabled=true,sender,publicUrl}={}) 
         LEFT JOIN push_deliveries d ON d.notification_id=n.id AND d.subscription_id=p.id
         WHERE m.active=1 AND n.read_at='' AND n.created_at>=? AND p.created_at<=n.created_at
         AND EXISTS(SELECT 1 FROM branches b WHERE b.id=n.branch AND b.active=1)
-        AND (n.type IN ('refund','cancellation','work_cancelled') OR o.status NOT IN ('Voided','Refunded')) AND (m.role='admin' OR EXISTS(SELECT 1 FROM json_each(m.branches) WHERE value=n.branch))
+        AND (n.type IN ('refund','cancellation','work_cancelled','delivery') OR o.status NOT IN ('Voided','Refunded')) AND (m.role='admin' OR EXISTS(SELECT 1 FROM json_each(m.branches) WHERE value=n.branch))
         AND (m.role<>'tailor' OR (n.type IN ('assigned','work_changed','work_cancelled') AND EXISTS(SELECT 1 FROM work_items w WHERE w.order_id=o.id AND w.tailor_id=m.id AND (w.status<>'Cancelled' OR n.type='work_cancelled') AND (n.task_id IS NULL OR w.id=n.task_id))))
         AND COALESCE(d.sent_at,'')='' AND COALESCE(d.attempts,0)<5 AND COALESCE(d.next_attempt,'')<=?
         ORDER BY n.created_at LIMIT 10`).all(cutoff,time);

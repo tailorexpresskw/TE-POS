@@ -1,0 +1,15 @@
+import {existsSync,mkdirSync,readFileSync,writeFileSync} from 'node:fs';
+import {randomBytes} from 'node:crypto';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+const root=fileURLToPath(new URL('..',import.meta.url)),folder=path.join(root,'data','inventory-connection');
+const url=new URL(process.argv[2]||'https://storage-app-sorj.onrender.com');
+if((url.protocol!=='https:'&&!(url.protocol==='http:'&&['localhost','127.0.0.1'].includes(url.hostname)))||url.username||url.password||url.pathname!=='/'||url.search||url.hash)throw new Error('Use the inventory app origin, with HTTPS for a hosted app.');
+mkdirSync(folder,{recursive:true});
+const file=path.join(folder,'connection.json'),saved=existsSync(file)?JSON.parse(readFileSync(file,'utf8')):{key:randomBytes(32).toString('hex'),createdAt:new Date().toISOString()};
+if(!/^[a-f0-9]{64}$/.test(saved.key))throw new Error('The saved integration key is invalid. Review it before replacing it.');
+saved.url=url.origin;writeFileSync(file,JSON.stringify(saved,null,2)+'\n',{mode:0o600});
+writeFileSync(path.join(folder,'POS.env'),`INVENTORY_URL=${url.origin}\nINVENTORY_INTEGRATION_KEY=${saved.key}\n`,{mode:0o600});
+writeFileSync(path.join(folder,'INVENTORY.env'),`POS_INTEGRATION_KEY=${saved.key}\n`,{mode:0o600});
+writeFileSync(path.join(folder,'READ-ME.txt'),'Private server configuration. Do not upload these files to GitHub or put the key in Flutter/browser code.\n\nDeploy the inventory adapter and POS changes. Put the values from INVENTORY.env in the inventory Render service environment. Put POS.env values in the POS Render service environment. Then sign in to POS as Admin and choose Administration > Inventory delivery connection to approve branch mappings. Add active delivery areas in inventory if none exist.\n\nThese files do not deploy or change either running service. Re-running setup keeps the same key.\n',{mode:0o600});
+console.log('Private connection settings saved in data/inventory-connection. The shared key was not printed. Neither live service has been changed.');

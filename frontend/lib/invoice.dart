@@ -3,7 +3,10 @@ import 'api.dart';
 String documentLabel(Json order) => switch (order['document_type']) {
   'refund' => 'Refund credit note',
   'cancellation' => 'Cancellation note',
-  'charge' => 'Additional charge invoice',
+  'charge' =>
+    order['charge_kind'] == 'delivery'
+        ? 'Delivery invoice'
+        : 'Additional charge invoice',
   _ => order['kind'] == 'quotation' ? 'Quotation' : 'Customer invoice',
 };
 

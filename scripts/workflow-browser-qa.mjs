@@ -5,13 +5,19 @@ import {randomUUID} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {createApp} from '../server/index.mjs';
 const output=path.resolve('outputs');mkdirSync(output,{recursive:true});
-const app=await createApp({dataDirectory:path.join(output,'workflow-browser-'+randomUUID()),production:false});
+const browserDeliveries=new Map();
+const app=await createApp({dataDirectory:path.join(output,'workflow-browser-'+randomUUID()),production:false,inventory:{url:'http://127.0.0.1:65530',key:'Browser-test-'+randomUUID(),start:false,fetcher:async(url,options)=>{
+  if(url.pathname.endsWith('/catalogue'))return Response.json({version:2,branches:[{id:'B008',name:'Inventory Zahra'}],areas:[{name:'QA Area',nameAr:'',zone:'One',chargeFils:2000}]});
+  if(options.body){const body=JSON.parse(options.body);const result={requestId:body.requestId,id:'DEL-QA-'+body.requestId,fromBranchId:body.fromBranchId,invoiceNo:body.invoiceNo,status:body.desiredStatus,revision:body.revision,driverName:'',etaLabel:'',etaAt:'',updatedAt:new Date().toISOString(),deliveredAt:'',chargeFils:body.chargeFils};browserDeliveries.set(body.requestId,result);return Response.json(result);}
+  return Response.json(browserDeliveries.get(decodeURIComponent(url.pathname.split('/').at(-1))));
+}}});
 await new Promise(resolve=>app.server.listen(0,'127.0.0.1',resolve));
 const base=`http://127.0.0.1:${app.server.address().port}`,password='QA-'+randomUUID(),sessions={};
 await app.auth.createOwner({name:'QA Admin',username:'qa.admin',email:'admin@qa.test',password});
 async function login(name,username){const r=await fetch(base+'/api/auth/login',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({username,password})});assert.equal(r.status,200);sessions[name]=r.headers.get('set-cookie').split(';')[0].split('=')[1];}
 await login('admin','qa.admin');
 async function post(route,body){const r=await fetch(base+'/api/'+route,{method:'POST',headers:{'Content-Type':'application/json',Cookie:'te_pos_session='+sessions.admin},body:JSON.stringify(body)});assert.equal(r.status,200,await r.clone().text());return r.json();}
+await post('inventory-connection',{mappings:[{branch:'zahra',inventoryBranchId:'B008'}]});
 await post('members',{name:'QA Reception',email:'reception@qa.test',role:'reception',branches:['zahra'],password});
 await post('members',{name:'QA Manager',username:'qa.manager',role:'manager',branches:['zahra'],password});
 await post('members',{name:'QA Supervisor',username:'qa.supervisor',role:'supervisor',branches:['zahra','avenues'],password});
@@ -23,7 +29,8 @@ const denied=await fetch(base+'/api/auth/login',{method:'POST',headers:{'Content
 assert.equal(denied.status,403);assert.equal((await denied.json()).code,'SHIFT_BLOCKED');
 await post('members',{name:'Other Branch Tailor',email:'other@qa.test',role:'tailor',branches:['avenues'],password});
 const customer=await post('customers',{name:'QA Customer',phone:'55551234',address:'Kuwait City'});
-const mainInvoice=await post('orders',{id:randomUUID(),branch:'zahra',kind:'sale',customerId:customer.id,tailorId:tailor.id,lines:[{id:'1001',qty:1,price:2000,note:'Hem to 90 cm'}],payments:[],dueDate:'2026-11-03',notes:'QA garment instructions'});
+let mainInvoice=await post('orders',{id:randomUUID(),branch:'zahra',kind:'sale',customerId:customer.id,tailorId:tailor.id,lines:[{id:'1001',qty:1,price:2000,note:'Hem to 90 cm'}],payments:[],dueDate:'2026-11-03',notes:'QA garment instructions'});
+const deliveryInvoiceResult=await post('orders/'+mainInvoice.id,{action:'charge',id:randomUUID(),version:mainInvoice.version,chargeKind:'delivery',name:'Delivery fee',amount:2000});mainInvoice=deliveryInvoiceResult;
 async function get(route){const response=await fetch(base+'/api/'+route,{headers:{Cookie:'te_pos_session='+sessions.admin}});assert.equal(response.status,200);return response.json();}
 await login('manager','qa.manager');await login('supervisor','qa.supervisor');await login('reception','reception@qa.test');await login('tailor','tailor@qa.test');
 const child=spawn(process.env.CHROME_BIN||'C:/Program Files/Google/Chrome/Application/chrome.exe',['--headless=new','--force-renderer-accessibility','--disable-gpu','--no-first-run','--no-default-browser-check','--remote-debugging-port=9334',`--user-data-dir=${path.join(output,'workflow-chrome-profile')}`,'about:blank'],{stdio:'ignore',windowsHide:true});
@@ -79,7 +86,10 @@ try{
   await click('Manage users');await click('Add branch');await wait(has('Invoice code'));await screenshot('admin-add-branch');await click('Cancel');
   // Widget tests exercise both fields and form submission; seed this browser fixture through the API.
   await post('branches',{name:'QA New Branch',code:'NB'});await account('admin');await click('Manage users');await wait(has('QA New Branch'));
-  const adminBranches=await evaluate("fetch('/api/boot').then(r=>r.json()).then(b=>b.branches)");assert.ok(adminBranches.some(b=>b.name==='QA New Branch'));assert.ok(!adminBranches.some(b=>b.id==='aventura'));await screenshot('admin-branches');
+  const adminBranches=await evaluate("fetch('/api/boot').then(r=>r.json()).then(b=>b.branches)");assert.ok(adminBranches.some(b=>b.name==='QA New Branch'));assert.ok(adminBranches.some(b=>b.id==='aventura'));await screenshot('admin-branches');
+  await click('Inventory delivery connection');await wait(has('Save branch mappings'));await screenshot('inventory-connection');
+  await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await sleep(300);await screenshot('inventory-connection-phone');await click('Close');
+  await send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   await click('Off-shift alerts');await wait(has('Scheduled day off')+'||'+has('Outside scheduled shift'));await screenshot('admin-shift-alerts');
   await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await sleep(400);await screenshot('admin-shift-alerts-phone');await click('Close');
   await send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
@@ -106,6 +116,10 @@ try{
   await exportInvoice('WhatsApp PDF / mobile layout','invoice-whatsapp',390);
   await exportInvoice('Print tailor work slips','invoice-tailor-work',500);
   await click('WhatsApp invoice');await wait(has('Save WhatsApp PDF'));await screenshot('whatsapp-invoice-dialog');
+  await account('reception');await click('Tracking');await click('Invoice / WhatsApp');await click('Customer home delivery');await click('Enter delivery address and phone');await wait(has('Save delivery draft'));await screenshot('customer-delivery-editor');
+  await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await sleep(300);await screenshot('customer-delivery-editor-phone');await click('Save delivery draft');await wait(has('Awaiting reception approval'));await app.deliveries.flush();await click('Refresh delivery');await screenshot('customer-delivery-status-phone');await click('Close');
+  assert.equal(browserDeliveries.size,0,'Draft must stay local before Reception sends it');
+  await send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   await account('tailor');await screenshot('tailor-dashboard');
   await click('Notifications');await wait(has('New tailor assignment'));await screenshot('notification-inbox');await click('Mark all as read');await click('Close');
 
@@ -118,6 +132,7 @@ try{
   await account('reception');await click('Tracking');await click('Job details');await wait(has('Check finished work'));await screenshot('reception-service-check');
   await click('Check finished work');await click('Save');await wait(has('Work checked and approved.'));
   const approved=(await get('tracking/'+mainInvoice.id)).job;assert.equal(approved.job_status,'Completed');
+  await account('reception');await click('Tracking');await click('Invoice / WhatsApp');await click('Customer home delivery');await click('Send delivery request');await app.deliveries.flush();await click('Refresh delivery');await wait(has('Ready in inventory'));await send('Emulation.setDeviceMetricsOverride',{width:390,height:844,deviceScaleFactor:1,mobile:true});await sleep(300);await screenshot('approved-delivery-ready-phone');await click('Close');assert.equal(browserDeliveries.size,1);assert.equal([...browserDeliveries.values()][0].fromBranchId,'B008');await send('Emulation.setDeviceMetricsOverride',{width:1440,height:900,deviceScaleFactor:1,mobile:false});
   await post('tracking/'+mainInvoice.id,{action:'backjob',parentTaskId:approved.tasks[0].id,tailorId:fixingTailor.id,quantity:1,fault:'no_fault',note:'Customer requested a further fit',version:approved.version});
   let financial=await post('orders',{id:randomUUID(),branch:'zahra',kind:'sale',customerId:customer.id,lines:[{id:'1001',qty:2,price:2000}],payments:[{amount:4000,method:'Cash'}]});
   financial=await post('orders/'+financial.id,{action:'refund',id:randomUUID(),version:financial.version,lines:[{index:0,qty:1}],reason:'Customer returned one garment',method:'Cash'});

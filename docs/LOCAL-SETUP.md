@@ -22,7 +22,7 @@ Only Admin can create or change staff accounts. The initial local setup command 
 
 Existing Cashier accounts are treated as Reception without deleting or replacing the accounts. Existing Branch Manager accounts retain their branch and financial permissions. Existing email logins continue to work; Admin can add usernames to these accounts without replacing them. New accounts use usernames (3?50 letters, numbers, dots, hyphens or underscores) and passwords.
 
-Branches are stored in the database, so creating one requires no code change or rebuild. Aventura is retired from the location picker and new staff assignments; its old invoices, payments and documents remain intact and accessible to Admin. If staff previously had only Aventura access, Admin must assign another active branch before they can continue working.
+Branches are stored in the database, so creating one requires no code change or rebuild. Aventura is active again in location selection and staff assignments under its existing AV code. Its historical invoices, payments and documents are preserved. Assign the branch to the relevant staff and map it to the matching inventory branch for delivery.
 
 ### Customers and service instructions
 

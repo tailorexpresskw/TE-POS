@@ -108,7 +108,7 @@ test('Admin-only accounts, branch invoices, tailor assignment and private tracki
     const other=await call('orders','otherReception',newInvoice({branch:'avenues',tailorId:users.get('otherTailor')}));
     await call('orders/'+other.id,'reception',undefined,403);await call('orders/'+other.id,'reception',{action:'assign',tailorId:users.get('tailorA'),version:0},403);
     const branch=await call('data?branch=zahra','reception');assert.ok(branch.orders.every(o=>o.branch==='zahra'));
-    const global=await call('dashboard?branch=all','admin');assert.equal(global.totals.invoices,3);assert.equal(global.branches.length,9);
+    const global=await call('dashboard?branch=all','admin');assert.equal(global.totals.invoices,3);assert.equal(global.branches.length,10);
     const branchDash=await call('dashboard?branch=zahra','reception');assert.equal(branchDash.totals.invoices,2);assert.equal(branchDash.branches.length,1);
     const file=await fetch(base+'/api/documents?branch=zahra',{method:'POST',headers:{Cookie:cookies.get('reception'),'Content-Type':'application/pdf',Origin:base},body:'%PDF-1.4 test'});assert.equal(file.status,200);const doc=await file.json();
     const withDoc=await call('orders','reception',newInvoice({tailorId:users.get('tailorA'),attachments:[doc.id]}));

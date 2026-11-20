@@ -3,7 +3,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 $releaseFolder = Join-Path $projectRoot ('outputs/release-'+(Get-Date -Format 'yyyyMMdd-HHmmss')+'-'+([guid]::NewGuid().ToString('N').Substring(0,6)))
 $stage = Join-Path $releaseFolder 'TailorExpress-POS'
 New-Item -ItemType Directory -Path $stage -Force | Out-Null
-foreach ($folder in @('server','drizzle')) {
+foreach ($folder in @('server','drizzle','integrations')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot $folder) -Destination $stage -Recurse -Force
 }
 foreach ($folder in @('lib','scripts','public','frontend')) {
@@ -14,7 +14,7 @@ foreach ($file in @('service.ts','tracking.ts','workflow.ts','adjustments.ts','n
 }
 Copy-Item -LiteralPath (Join-Path $projectRoot 'public/pos') -Destination (Join-Path $stage 'public') -Recurse -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'scripts/build-flutter.mjs') -Destination (Join-Path $stage 'scripts') -Force
-foreach ($file in @('import-sales.py','import-sales.test.py')) {
+foreach ($file in @('import-sales.py','import-sales.test.py','setup-inventory-connection.mjs','prepare-inventory-adapter.py','apply-inventory-adapter.ps1','inventory-adapter-smoke.mjs')) {
     Copy-Item -LiteralPath (Join-Path $projectRoot ('scripts/'+$file)) -Destination (Join-Path $stage 'scripts') -Force
 }
 foreach ($folder in @('lib','web','assets','test')) {
@@ -31,6 +31,7 @@ Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/APP-AND-NOTIFICATIONS.md') 
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/SERVICE-WORKFLOWS.md') -Destination (Join-Path $stage 'SERVICE-WORKFLOWS.md') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/SHIFT-ACCESS.md') -Destination (Join-Path $stage 'SHIFT-ACCESS.md') -Force
 Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/SALES-IMPORT.md') -Destination (Join-Path $stage 'SALES-IMPORT.md') -Force
+Copy-Item -LiteralPath (Join-Path $projectRoot 'docs/INVENTORY-DELIVERIES.md') -Destination (Join-Path $stage 'INVENTORY-DELIVERIES.md') -Force
 $package = @{
     name='tailor-express-pos'; version='0.4.0'; private=$true; type='module';
     engines=@{node='>=22.13.0'};
@@ -39,7 +40,7 @@ $package = @{
         start='node --env-file-if-exists=.env --experimental-strip-types server/index.mjs';
         build='node scripts/build-flutter.mjs';
         'setup-admin'='node --env-file-if-exists=.env --experimental-strip-types server/setup-admin.mjs';
-        test='node --experimental-strip-types --test server/server.test.mjs server/workflow.test.mjs server/migration.test.mjs server/notifications.test.mjs server/pwa.test.mjs server/branches.test.mjs server/service-workflows.test.mjs lib/domain.test.mjs lib/shift-rules.test.mjs server/shifts.test.mjs server/import-view.test.mjs'
+        test='node --experimental-strip-types --test server/server.test.mjs server/workflow.test.mjs server/migration.test.mjs server/notifications.test.mjs server/pwa.test.mjs server/branches.test.mjs server/service-workflows.test.mjs lib/domain.test.mjs lib/shift-rules.test.mjs server/shifts.test.mjs server/import-view.test.mjs server/deliveries.test.mjs'
     }
 }
 & node (Join-Path $projectRoot 'scripts/copy-runtime-deps.mjs') $stage

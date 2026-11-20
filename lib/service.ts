@@ -7,7 +7,8 @@ import {createAdjustments} from './adjustments.ts';
 import type {Database, DocumentStore, Row} from './storage.ts';
 
 type ShiftControls={branch:(member:Row,branch:string,request?:Request)=>void;read:(member:Row,id:string)=>Row;write:(member:Row,id:string,body:Row)=>Row;alerts:(member:Row,url:URL)=>Row;inbox:(member:Row)=>{items:Row[];unread:number};mark:(member:Row,id:string)=>Row};
-export function createService(runtime: {database: Database; bucket: DocumentStore; authenticate: (request:Request)=>Promise<{userId:string;shiftAccess?:Row}|null>; setPassword:(id:string,password:string)=>Promise<void>;pushPublicKey?:string;shifts?:ShiftControls}) {
+type DeliveryControls={configured:boolean;config:(member:Row)=>Promise<Row>;saveConfig:(member:Row,body:Row)=>Promise<Row>;options:(sale:Row)=>Promise<Row>;read:(sale:Row)=>Row|null;write:(member:Row,sale:Row,body:Row)=>Promise<Row>};
+export function createService(runtime: {database: Database; bucket: DocumentStore; authenticate: (request:Request)=>Promise<{userId:string;shiftAccess?:Row}|null>; setPassword:(id:string,password:string)=>Promise<void>;pushPublicKey?:string;shifts?:ShiftControls;deliveries?:DeliveryControls}) {
 const now=()=>new Date().toISOString();
 const uuid=()=>crypto.randomUUID();
 const db=()=>runtime.database;
@@ -56,6 +57,7 @@ function dateRange(url:URL) {
   return [new Date(from+'T00:00:00+03:00').toISOString(),new Date(to+'T23:59:59.999+03:00').toISOString()];
 }
 async function read(member:Row,path:string[],url:URL):Promise<any> {
+  if(path[0]==='inventory-connection'){admin(member);check(runtime.deliveries,'Delivery integration is unavailable.',503);return runtime.deliveries.config(member);}
   if(path[0]==='shifts'){admin(member);check(runtime.shifts,'Shift controls are not configured.',503);return path[1]==='alerts'?runtime.shifts.alerts(member,url):runtime.shifts.read(member,text(path[1],100));}
   if(path[0]==='notifications')return notifications.read(member,path);
   if(path[0]==='boot') {
@@ -88,15 +90,18 @@ async function read(member:Row,path:string[],url:URL):Promise<any> {
   }
   if(path[0]==='orders' && path[1]) {
     const sale=await order(member,path[1]);
+    if(path[2]==='delivery-options'){check(runtime.deliveries,'Delivery integration is unavailable.',503);return runtime.deliveries.options(sale);}
+    if(path[2]==='delivery'){return {delivery:runtime.deliveries?.read(sale)??null,configured:runtime.deliveries?.configured??false};}
     const parent=sale.parent_order_id?await first('SELECT id,bill FROM orders WHERE id=?',sale.parent_order_id):null;
     if(path[2]==='customer-status'){
       const work=await tracking.tasks(sale);
-      return {invoice:sale.bill,status:sale.status,workStatus:sale.job_status,collectionDate:sale.due_date,
+      const delivery=runtime.deliveries?.read(sale);
+      return {invoice:sale.bill,status:sale.status,workStatus:sale.job_status,collectionDate:sale.due_date,delivery:delivery?{status:delivery.remote_status||delivery.desired_status,driverName:delivery.driver_name,eta:delivery.eta_label,deliveredAt:delivery.delivered_at}:null,
         services:JSON.parse(sale.lines).map((l:Row,i:number)=>({name:l.name,quantity:l.qty,status:work.filter(w=>w.line_index===i&&w.is_latest).map(w=>w.status)}))};
     }
     const returned=parent?await first('SELECT COALESCE(-SUM(amount),0) amount FROM payments WHERE order_id=? AND amount<0 AND instr(reference,?)=1',parent.id,sale.bill):null;
     return {order:{...decode(sale),parent_bill:parent?.bill??'',cash_returned:returned?.amount??0},parent,
-      related:await all('SELECT id,bill,document_type,total,paid,refunded_total,status,created_at FROM orders WHERE parent_order_id=? ORDER BY created_at',sale.id),
+      related:await all('SELECT id,bill,document_type,charge_kind,total,paid,refunded_total,status,created_at FROM orders WHERE parent_order_id=? ORDER BY created_at',sale.id),
       refundOptions:sale.kind==='sale'?await adjustments.options(sale):[],
       tasks:await tracking.tasks(sale),payments:await all('SELECT * FROM payments WHERE order_id=? ORDER BY created_at',sale.id),attachments:await all('SELECT id,name,type FROM attachments WHERE order_id=?',sale.id)};
   }
@@ -107,6 +112,7 @@ async function read(member:Row,path:string[],url:URL):Promise<any> {
   check(false,'Endpoint not found.',404);
 }
 async function write(member:Row,path:string[],body:Row):Promise<any> {
+  if(path[0]==='inventory-connection'){admin(member);check(runtime.deliveries,'Delivery integration is unavailable.',503);return runtime.deliveries.saveConfig(member,body);}
   if(path[0]==='shifts'){admin(member);check(runtime.shifts,'Shift controls are not configured.',503);if(path[1]==='alerts'){check(body.action==='read','Invalid alert action.');return runtime.shifts.mark(member,text(body.id??'all',100));}return runtime.shifts.write(member,text(path[1],100),body);}
   if(path[0]==='notifications')return notifications.write(member,path,body);
   if(path[0]==='tracking'&&path[1])return tracking.progress(member,path[1],body);
@@ -170,6 +176,7 @@ async function write(member:Row,path:string[],body:Row):Promise<any> {
   }
   if(path[0]==='orders' && path[1]) {
     const sale=await order(member,path[1]),action=text(body.action,40);
+    if(path[2]==='delivery'){check(runtime.deliveries,'Delivery integration is unavailable.',503);return runtime.deliveries.write(member,sale,body);}
     if(['refund','void','cancel','charge'].includes(action)){
       const result=await adjustments.write(member,sale,body);return {...decode(result.order),adjustment:decode(result.document)};
     }

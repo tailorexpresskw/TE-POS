@@ -19,7 +19,8 @@ export function createAdjustments(deps:WorkflowDeps){
     const previous=await first('SELECT * FROM orders WHERE id=?',id),type=isCharge?'charge':isCancel?'cancellation':'refund';
     if(previous){check(previous.parent_order_id===sale.id&&previous.document_type===type,'Document identifier conflict.',409);return {document:previous,order:sale};}
     check(sale.kind==='sale'&&!['Voided','Refunded'].includes(sale.status),'This invoice is already reversed.');await deps.branchAccess(member,sale.branch);
-    const reason=text(body.reason,2000),reasonCode=text(body.reasonCode,80);
+    const reason=text(body.reason,2000),reasonCode=text(body.reasonCode,80),chargeKind=isCharge?text(body.chargeKind??'extra',20):'';
+    if(isCharge)check(['delivery','extra'].includes(chargeKind),'Choose the charge type.');
     if(!isCharge){check(reason.length>=3,'Enter the reason.');if(isCancel)check(CANCELLATION_REASONS.includes(reasonCode),'Choose a cancellation reason.');}
     let lines:Row[],amount=0,cash=0;const method=text(body.method,40),choices=await options(sale);
     if(isCharge){
@@ -49,7 +50,7 @@ export function createAdjustments(deps:WorkflowDeps){
     const document={id,branch:sale.branch,bill,kind:isCharge?'sale':type,parent_order_id:sale.id,document_type:type,
       customer_id:sale.customer_id,customer_name:sale.customer_name,phone:sale.phone,address:sale.address,
       lines:JSON.stringify(lines),subtotal:amount,discount:0,extra:0,total:amount,paid:isCharge?cash:0,refunded_total:0,
-      notes:isCharge?text(body.note,1000):'',reason,reason_code:reasonCode,cashier:member.name,cashier_id:member.id,
+      notes:isCharge?text(body.note,1000):'',reason,reason_code:reasonCode,charge_kind:chargeKind,cashier:member.name,cashier_id:member.id,
       status:isCharge?(cash===amount?'Closed':'Ongoing'):'Issued',created_at:m.time,updated_at:m.time,version:0};
     const operations=[m.insert('orders',document)];
     if(isCharge){

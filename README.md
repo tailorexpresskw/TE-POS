@@ -2,7 +2,7 @@
 
 Standalone Flutter Web POS with Admin, Supervisor, Branch Manager, Reception and Tailor dashboards. Staff sign in with a username and password. The Node.js server stores invoices, tracking history and documents locally.
 
-First-time administrator setup: `Setup-Admin.cmd`. Then run `Start-POS.cmd` and open http://localhost:3000. Only Admin can create staff users and branches. Supervisors oversee one or more assigned branches. Aventura is retired from branch selection; its historical records remain stored.
+First-time administrator setup: `Setup-Admin.cmd`. Then run `Start-POS.cmd` and open http://localhost:3000. Only Admin can create staff users and branches. Supervisors oversee one or more assigned branches. Aventura is active again under its original AV code, with historical records preserved.
 
 See [Local setup and your own deployment](docs/LOCAL-SETUP.md). All current work is local; publishing is under your control.
 
@@ -13,6 +13,8 @@ Service-level assignments, reception checks, backjobs, work credit and linked re
 Admin can enable weekly working hours, dated days off and temporary exceptions for every non-Admin role. The server blocks off-shift access and alerts Admin only. See [Shift access](docs/SHIFT-ACCESS.md) for rollout and limitations.
 
 The local [legacy sales importer](docs/SALES-IMPORT.md) previews and imports detailed Excel exports with backups, duplicate prevention and reconciliation reports. Imported customer data stays outside Git and release packages.
+
+The [inventory delivery connector](docs/INVENTORY-DELIVERIES.md) creates branch-correct customer-home delivery requests from POS invoices and syncs driver progress. Both servers need the connector and matching private environment keys; Admin approves branch mappings before use.
 
 The project folders are:
 

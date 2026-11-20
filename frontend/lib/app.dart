@@ -17,6 +17,7 @@ part 'workflow.dart';
 part 'notifications.dart';
 part 'operations.dart';
 part 'shifts.dart';
+part 'deliveries.dart';
 
 const mint = Color(0xffabdabb),
     green = Color(0xff22bf74),
@@ -121,6 +122,7 @@ class AppState extends State<PosApp> {
   bool notificationDialogOpen = false;
   Timer? notificationTimer;
   Timer? shiftEndTimer, shiftWarningTimer;
+  Timer? deliveryPollTimer;
   String? shiftWindowKey;
   bool checkingShift = false;
   Json? suspendedShiftDraft;
@@ -270,6 +272,7 @@ class AppState extends State<PosApp> {
     notificationTimer?.cancel();
     shiftEndTimer?.cancel();
     shiftWarningTimer?.cancel();
+    deliveryPollTimer?.cancel();
     super.dispose();
   }
 

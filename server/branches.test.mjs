@@ -21,8 +21,8 @@ test('Admin creates durable branches; Supervisors only oversee their assigned br
   let branchId;
   try{
     await app.auth.createOwner({name:'Admin',username:'admin',password});await login('admin');
-    assert.equal((await call('boot')).branches.some(b=>b.id==='aventura'),false);
-    await call('orders','admin',sale('aventura'),403);
+    assert.equal((await call('boot')).branches.some(b=>b.id==='aventura'),true);
+    assert.equal((await call('boot')).branches.find(b=>b.id==='aventura').code,'AV');
     await call('branches','admin',{name:'X',code:'NEW'},400);
     await call('branches','admin',{name:'New Branch',code:'bad code'},400);
     const branch=await call('branches','admin',{name:'New Branch',code:'nb'});branchId=branch.id;
@@ -33,7 +33,7 @@ test('Admin creates durable branches; Supervisors only oversee their assigned br
       ['supervisor','supervisor',['zahra',branchId]],['reception','reception',[branchId]],
       ['manager','manager',['zahra']],['tailor','tailor',[branchId]],
     ]){await call('members','admin',{username,name:username,role,branches,password});await login(username);}
-    await call('members','admin',{username:'retired',name:'Retired',role:'supervisor',branches:['aventura'],password},400);
+    await call('members','admin',{username:'retired',name:'Retired',role:'supervisor',branches:['aventura'],password});
     await call('members','admin',{username:'unknown',name:'Unknown',role:'supervisor',branches:['unknown'],password},400);
     await call('members','admin',{username:'empty',name:'Empty',role:'supervisor',branches:[],password},400);
     for(const user of ['supervisor','manager','reception','tailor']){

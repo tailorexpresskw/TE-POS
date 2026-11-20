@@ -33,7 +33,7 @@ Cancellation requires a category and explanation and creates a linked cancellati
 
 ## Additional charges and printing
 
-Add delivery / extra charge on an original receipt creates a numbered charge sub-invoice. It can be paid immediately or collected later and appears under Linked documents. It does not rewrite the main invoice's total.
+Add delivery / extra charge on an original receipt creates a numbered charge sub-invoice. It can be paid immediately or collected later and appears under Linked documents. It does not rewrite the main invoice's total. Select Charge type Delivery for a delivery invoice; its Send delivery request action collects address and phone and keeps a local draft until Reception approves. Sending creates a Ready request in inventory automatically. Other extra charges do not dispatch.
 
 Customer receipts use the existing 80 mm paper format. WhatsApp PDFs retain the separate phone-friendly layout. Refund, cancellation and charge documents identify their purpose and original invoice. Print tailor work slips groups current work by tailor with service quantities, garment notes and backjob instructions; these slips exclude invoice amounts and customer phone numbers. Review the preview before printing. The app cannot verify that a physical printer produced a page, and WhatsApp attachments and sending remain manual.
 
