@@ -24,6 +24,8 @@ Existing Cashier accounts are treated as Reception without deleting or replacing
 
 Branches are stored in the database, so creating one requires no code change or rebuild. Aventura is active again in location selection and staff assignments under its existing AV code. Its historical invoices, payments and documents are preserved. Assign the branch to the relevant staff and map it to the matching inventory branch for delivery.
 
+Home Service is available under its existing branch ID `home` and invoice code `HS`. The startup migration adds it if missing or reactivates it on existing installations. Admin assigns Home Service to the staff who should access it; creating or activating the branch does not give other staff access. Customer-home delivery requests still use the original invoice's branch.
+
 ### Customers and service instructions
 
 Click **Walk-in customer** in the POS to search by name or phone, open a saved profile, edit contact details, view the selected branch's invoice history, or add a customer. Click **Select customer** to attach the saved customer to the invoice. Updating a profile does not rewrite previously issued invoices.

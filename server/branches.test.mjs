@@ -23,6 +23,8 @@ test('Admin creates durable branches; Supervisors only oversee their assigned br
     await app.auth.createOwner({name:'Admin',username:'admin',password});await login('admin');
     assert.equal((await call('boot')).branches.some(b=>b.id==='aventura'),true);
     assert.equal((await call('boot')).branches.find(b=>b.id==='aventura').code,'AV');
+    assert.equal((await call('boot')).branches.find(b=>b.id==='home').name,'Home Service');
+    assert.equal((await call('boot')).branches.find(b=>b.id==='home').code,'HS');
     await call('branches','admin',{name:'X',code:'NEW'},400);
     await call('branches','admin',{name:'New Branch',code:'bad code'},400);
     const branch=await call('branches','admin',{name:'New Branch',code:'nb'});branchId=branch.id;
@@ -32,6 +34,7 @@ test('Admin creates durable branches; Supervisors only oversee their assigned br
     for(const [username,role,branches] of [
       ['supervisor','supervisor',['zahra',branchId]],['reception','reception',[branchId]],
       ['manager','manager',['zahra']],['tailor','tailor',[branchId]],
+      ['home.reception','reception',['home']],
     ]){await call('members','admin',{username,name:username,role,branches,password});await login(username);}
     await call('members','admin',{username:'retired',name:'Retired',role:'supervisor',branches:['aventura'],password});
     await call('members','admin',{username:'unknown',name:'Unknown',role:'supervisor',branches:['unknown'],password},400);
@@ -51,6 +54,10 @@ test('Admin creates durable branches; Supervisors only oversee their assigned br
     for(const route of ['data?branch=avenues','dashboard?branch=avenues','tracking?branch=avenues','admin'])await call(route,'supervisor',undefined,403);
     await call('orders','supervisor',sale('avenues'),403);
     await call('orders','supervisor',sale('made-up'),403);
+    assert.deepEqual((await call('boot','home.reception')).branches.map(b=>b.id),['home']);
+    const homeInvoice=await call('orders','home.reception',sale('home'));assert.match(homeInvoice.bill,/^HS-/);
+    await call('orders','home.reception',sale('zahra'),403);
+    await call('orders/'+homeInvoice.id,'supervisor',undefined,403);
     const tailor=boot.staff.find(m=>m.role==='tailor');
     const assigned=await call('orders/'+first.id,'supervisor',{action:'assign',tailorId:tailor.id,version:first.version});
     const done=await call('tracking/'+first.id,'tailor',{action:'progress',status:'In Progress',version:assigned.version});

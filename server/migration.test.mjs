@@ -7,6 +7,36 @@ import {randomUUID} from 'node:crypto';
 import {createApp} from './index.mjs';
 import {readdirSync} from 'node:fs';
 
+for(const branchState of ['missing','inactive','active']){
+  test(`Home Service migration restores a ${branchState} branch and preserves history`,async()=>{
+    const directory=path.resolve('outputs','migration-home-'+randomUUID());mkdirSync(directory,{recursive:true});
+    const old=new DatabaseSync(path.join(directory,'pos.sqlite'));old.exec('CREATE TABLE _local_migrations(name TEXT PRIMARY KEY)');
+    for(const name of readdirSync('drizzle').filter(name=>name.endsWith('.sql')&&name<'0010').sort()){
+      old.exec(readFileSync(path.join('drizzle',name),'utf8'));old.prepare('INSERT INTO _local_migrations VALUES (?)').run(name);
+    }
+    if(branchState==='missing')old.exec("DELETE FROM branches WHERE id='home'");
+    else old.prepare("UPDATE branches SET active=?,created_at='2026-01-01T00:00:00Z' WHERE id='home'").run(branchState==='active'?1:0);
+    old.exec(`INSERT INTO members(id,user_id,email,name,role,branches,active)
+      VALUES ('home-staff','home-staff','home@migration.test','Home Reception','reception','["home"]',1);
+      INSERT INTO orders(id,branch,bill,kind,customer_name,lines,subtotal,discount,extra,total,paid,cashier,cashier_id,created_at,updated_at)
+      VALUES ('home-invoice','home','HS-OLD-1','sale','Existing Customer','[]',2000,0,0,2000,500,'Home Reception','home-staff','2026-11-01T10:00:00Z','2026-11-01T10:00:00Z');`);
+    const invoiceBefore=old.prepare("SELECT * FROM orders WHERE id='home-invoice'").get();
+    const staffBefore=old.prepare("SELECT * FROM members WHERE id='home-staff'").get();old.close();
+    const app=await createApp({dataDirectory:directory,production:false,push:false});
+    try{
+      const branch=app.storage.sqlite.prepare("SELECT * FROM branches WHERE id='home'").get();
+      assert.equal(branch.name,'Home Service');assert.equal(branch.code,'HS');assert.equal(branch.active,1);
+      if(branchState!=='missing')assert.equal(branch.created_at,'2026-01-01T00:00:00Z');
+      assert.deepEqual(app.storage.sqlite.prepare("SELECT * FROM orders WHERE id='home-invoice'").get(),invoiceBefore);
+      assert.deepEqual(app.storage.sqlite.prepare("SELECT * FROM members WHERE id='home-staff'").get(),staffBefore);
+      assert.equal(app.storage.sqlite.prepare("SELECT count(*) n FROM branches WHERE name='Home Service' OR code='HS'").get().n,1);
+    }finally{await app.close();}
+    const reopened=await createApp({dataDirectory:directory,production:false,push:false});
+    try{assert.equal(reopened.storage.sqlite.prepare("SELECT count(*) n FROM branches WHERE id='home'").get().n,1);}
+    finally{await reopened.close();}
+  });
+}
+
 test('tracking migration preserves existing users, prices and payment balances',async()=>{
   const directory=path.resolve('outputs','migration-'+randomUUID());mkdirSync(directory,{recursive:true});
   const old=new DatabaseSync(path.join(directory,'pos.sqlite'));
@@ -25,7 +55,7 @@ test('tracking migration preserves existing users, prices and payment balances',
     assert.equal(app.storage.sqlite.prepare('SELECT count(*) n FROM job_events').get().n,0);
     assert.equal(app.storage.sqlite.prepare("SELECT username FROM members WHERE id='existing'").get().username,null);
     assert.equal(app.storage.sqlite.prepare('SELECT count(*) n FROM notifications').get().n,0);
-    assert.equal(app.storage.sqlite.prepare('SELECT count(*) n FROM _local_migrations').get().n,10);
+    assert.equal(app.storage.sqlite.prepare('SELECT count(*) n FROM _local_migrations').get().n,11);
     assert.equal(app.storage.sqlite.prepare("SELECT active FROM branches WHERE id='aventura'").get().active,1);
     assert.equal(app.storage.sqlite.prepare('SELECT count(*) n FROM branches WHERE active=1').get().n,10);
   }finally{await app.close();}
